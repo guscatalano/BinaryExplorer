@@ -29,6 +29,7 @@
                                    Text="{x:Bind Title}"
                                    Style="{StaticResource BodyStrongTextBlockStyle}"
                                    TextWrapping="Wrap"
+                                   IsTextSelectionEnabled="True"
                                    VerticalAlignment="Top" />
                         <TextBlock Grid.Column="1"
                                    Text="{x:Bind Value}"

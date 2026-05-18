@@ -155,9 +155,9 @@ public sealed class InterfacesInspector : IBinaryInspector
                     foreach (var iface in rpcInterfaces)
                     {
                         findings.Add(new Finding(
-                            $"  {iface.Uuid}",
-                            $"v{iface.MajorVersion}.{iface.MinorVersion}",
-                            $"File offset: 0x{iface.FileOffset:X8}\nTransfer syntax: {iface.TransferSyntax}\nStruct length: {iface.StructLength} bytes",
+                            $"RPC interface v{iface.MajorVersion}.{iface.MinorVersion}",
+                            iface.Uuid,
+                            $"File offset: 0x{iface.FileOffset:X8}    Transfer syntax: {iface.TransferSyntax}    Struct length: {iface.StructLength} bytes",
                             Severity.Warning));
                     }
                 }
