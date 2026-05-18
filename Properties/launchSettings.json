@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "BinaryExplorer (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "BinaryExplorer (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BinaryExplorer.Pages.OverviewPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:BinaryExplorer.Pages"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <Style x:Key="SummaryCard" TargetType="Border">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="16" />
+        </Style>
+    </Page.Resources>
+
+    <ScrollViewer AllowDrop="True" DragOver="Page_DragOver" Drop="Page_Drop">
+        <Grid Padding="24,16,24,24" RowSpacing="16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Overview" />
+
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <Button x:Name="OpenButton" Click="OpenButton_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                        <TextBlock Text="Open binary..." />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="ExportButton" Click="ExportButton_Click" IsEnabled="False">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE74E;" FontSize="14" />
+                        <TextBlock Text="Export report..." />
+                    </StackPanel>
+                </Button>
+                <TextBlock x:Name="PathText" VerticalAlignment="Center"
+                           Style="{StaticResource BodyStrongTextBlockStyle}"
+                           Text="No file loaded" />
+                <ProgressRing x:Name="LoadingRing" IsActive="False" Width="20" Height="20" />
+                <TextBlock VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           FontStyle="Italic"
+                           Text="(or drag a file onto this page)" />
+            </StackPanel>
+
+            <InfoBar x:Name="ErrorBar" Grid.Row="2"
+                     IsOpen="False"
+                     Severity="Error"
+                     Title="Failed to open file" />
+
+            <Grid Grid.Row="3" ColumnSpacing="12" RowSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border Style="{StaticResource SummaryCard}" Grid.Row="0" Grid.Column="0">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Language / Runtime" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock x:Name="LanguageHeadline" Text="—" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource SummaryCard}" Grid.Row="0" Grid.Column="1">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Authenticode Signature" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock x:Name="SignatureHeadline" Text="—" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource SummaryCard}" Grid.Row="1" Grid.Column="0">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="ETW Providers" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock x:Name="EtwHeadline" Text="—" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource SummaryCard}" Grid.Row="1" Grid.Column="1">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="PE Metadata" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock x:Name="PeHeadline" Text="—" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </ScrollViewer>
+</Page>

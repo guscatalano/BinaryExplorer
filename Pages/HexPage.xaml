@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BinaryExplorer.Pages.HexPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:BinaryExplorer.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="24,16,24,24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Hex View" />
+        <TextBlock x:Name="HeadlineText"
+                   Grid.Row="1"
+                   Style="{StaticResource SubtitleTextBlockStyle}"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+        <Grid Grid.Row="2" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="160" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="100" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" Text="Offset:" />
+            <TextBox Grid.Column="1" x:Name="OffsetInput" FontFamily="Consolas" PlaceholderText="0x0 or 0n0" />
+            <TextBlock Grid.Column="2" VerticalAlignment="Center" Margin="8,0,0,0" Text="Bytes:" />
+            <NumberBox Grid.Column="3" x:Name="LengthInput" Value="4096" Minimum="16" Maximum="262144"
+                       SpinButtonPlacementMode="Compact" />
+            <Button Grid.Column="4" Content="Go" Click="Go_Click" Margin="8,0,0,0"
+                    Style="{StaticResource AccentButtonStyle}" />
+            <Button Grid.Column="5" Click="PageBack_Click" Margin="8,0,0,0" ToolTipService.ToolTip="Page back">
+                <FontIcon Glyph="&#xE76B;" FontSize="12" />
+            </Button>
+            <Button Grid.Column="6" Click="PageForward_Click" HorizontalAlignment="Left" ToolTipService.ToolTip="Page forward">
+                <FontIcon Glyph="&#xE76C;" FontSize="12" />
+            </Button>
+        </Grid>
+
+        <Border Grid.Row="3"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="6">
+            <controls:HexView x:Name="Hex" />
+        </Border>
+    </Grid>
+</Page>

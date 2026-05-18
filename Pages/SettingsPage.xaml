@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BinaryExplorer.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:BinaryExplorer.Pages"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer>
+        <StackPanel Padding="24,16,24,24" Spacing="16">
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Settings" />
+
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="MCP server" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Port:" VerticalAlignment="Center" />
+                        <NumberBox x:Name="McpPortBox" Width="100" Value="18765" Minimum="1024" Maximum="65535" />
+                        <Button x:Name="McpStartButton" Click="McpStart_Click" Content="Start" />
+                        <Button x:Name="McpStopButton" Click="McpStop_Click" Content="Stop" IsEnabled="False" />
+                        <TextBlock x:Name="McpStatusLabel" Text="stopped" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" Margin="12,0,0,0" />
+                    </StackPanel>
+                    <TextBox x:Name="McpUrlBox" IsReadOnly="True" FontFamily="Consolas" Visibility="Collapsed" />
+                    <InfoBar x:Name="McpStatusBar" IsOpen="False" />
+
+                    <TextBlock Margin="0,8,0,0" Text="VS Code Copilot (HTTP) - .vscode/mcp.json"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBox x:Name="CfgVsCodeHttpBox"
+                                 IsReadOnly="True"
+                                 FontFamily="Consolas"
+                                 FontSize="12"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 MinHeight="90"
+                                 MinWidth="500" />
+                        <Button Click="CopyConfig_Click" Tag="VsCodeHttp" Content="Copy" VerticalAlignment="Top" />
+                    </StackPanel>
+
+                    <TextBlock Margin="0,4,0,0" Text="Claude Code (HTTP)"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBox x:Name="CfgClaudeCodeBox"
+                                 IsReadOnly="True"
+                                 FontFamily="Consolas"
+                                 FontSize="12"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 MinHeight="40"
+                                 MinWidth="500" />
+                        <Button Click="CopyConfig_Click" Tag="ClaudeCode" Content="Copy" VerticalAlignment="Top" />
+                    </StackPanel>
+
+                    <TextBlock Margin="0,4,0,0" Text="curl smoke-test"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBox x:Name="CfgCurlBox"
+                                 IsReadOnly="True"
+                                 FontFamily="Consolas"
+                                 FontSize="12"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 MinHeight="60"
+                                 MinWidth="500" />
+                        <Button Click="CopyConfig_Click" Tag="Curl" Content="Copy" VerticalAlignment="Top" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="VirusTotal API key" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Free key from virustotal.com - My API Key. Stored locally per-package; never sent anywhere except virustotal.com." />
+                    <PasswordBox x:Name="VtKeyBox" PlaceholderText="Paste your VirusTotal API key" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Save" Click="SaveVtKey_Click" Style="{StaticResource AccentButtonStyle}" />
+                        <Button Content="Test" Click="TestVtKey_Click" />
+                        <Button Content="Clear" Click="ClearVtKey_Click" />
+                    </StackPanel>
+                    <InfoBar x:Name="VtStatus" IsOpen="False" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Experimental" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <ToggleSwitch x:Name="ExperimentalEtwToggle"
+                                  Header="Native ETW provider scan"
+                                  Toggled="ExperimentalEtwToggle_Toggled" />
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Scans .rdata/.data for the (GUID + pointer-to-string) byte pattern used by TraceLogging providers. Heuristic - can produce false positives." />
+                </StackPanel>
+            </Border>
+
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Embedded file scan" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Choose which file types to look for inside the binary. Click Rescan on the Embedded Files page after toggling." />
+                    <ToggleSwitch x:Name="EmbArchivesToggle"  Header="Archives (ZIP, 7z, CAB, GZIP, BZIP2, XZ, ZSTD, RAR, LZ4)" Toggled="EmbCategory_Toggled" Tag="Archives" />
+                    <ToggleSwitch x:Name="EmbDocumentsToggle" Header="Documents (PDF, RTF, MSI/CFB)"                              Toggled="EmbCategory_Toggled" Tag="Documents" />
+                    <ToggleSwitch x:Name="EmbMarkupToggle"    Header="Markup (XML)"                                                Toggled="EmbCategory_Toggled" Tag="Markup" />
+                    <ToggleSwitch x:Name="EmbImagesToggle"    Header="Images (PNG, JPEG, GIF, ICO, CUR, BMP)"                     Toggled="EmbCategory_Toggled" Tag="Images" />
+                    <ToggleSwitch x:Name="EmbMediaToggle"     Header="Media (RIFF/WAV/AVI/WebP, MP4)"                              Toggled="EmbCategory_Toggled" Tag="Media" />
+                    <ToggleSwitch x:Name="EmbCodeToggle"      Header="Code (PE/MZ, ELF, Mach-O)"                                   Toggled="EmbCategory_Toggled" Tag="Code" />
+                    <ToggleSwitch x:Name="EmbDataToggle"      Header="Data (SQLite, PEM)"                                          Toggled="EmbCategory_Toggled" Tag="Data" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

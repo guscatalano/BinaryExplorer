@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="BinaryExplorer.Controls.FindingsList"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:core="using:BinaryExplorer.Core"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ItemsControl x:Name="Items">
+        <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="core:Finding">
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="0,0,0,1"
+                        Padding="12,10,12,10">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="{x:Bind Title}"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Top" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{x:Bind Value}"
+                                   TextWrapping="Wrap"
+                                   IsTextSelectionEnabled="True"
+                                   VerticalAlignment="Top" />
+                        <Button Grid.Column="2"
+                                Tag="{x:Bind Value}"
+                                Click="CopyValue_Click"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="6,4,6,4"
+                                ToolTipService.ToolTip="Copy value"
+                                Visibility="{x:Bind Value, Converter={StaticResource NullToVisibility}}">
+                            <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+                        </Button>
+                        <TextBlock Grid.Row="1" Grid.Column="1"
+                                   Text="{x:Bind Details}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   FontFamily="Consolas"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   IsTextSelectionEnabled="True"
+                                   Visibility="{x:Bind Details, Converter={StaticResource NullToVisibility}}" />
+                    </Grid>
+                </Border>
+            </DataTemplate>
+        </ItemsControl.ItemTemplate>
+    </ItemsControl>
+</UserControl>

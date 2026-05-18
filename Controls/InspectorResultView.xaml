@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="BinaryExplorer.Controls.InspectorResultView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:BinaryExplorer.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="24,16,24,24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="TitleText"
+                   Style="{StaticResource TitleTextBlockStyle}" />
+        <TextBlock x:Name="HeadlineText"
+                   Grid.Row="1"
+                   Style="{StaticResource SubtitleTextBlockStyle}"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        <TextBlock x:Name="EmptyText"
+                   Grid.Row="2"
+                   Text="No file loaded. Open one from the Overview page."
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Visibility="Collapsed" />
+        <InfoBar x:Name="ErrorBar"
+                 Grid.Row="3"
+                 Severity="Error"
+                 IsOpen="False"
+                 Title="Inspector reported an error" />
+
+        <Grid x:Name="SearchBar"
+              Grid.Row="4"
+              ColumnSpacing="8"
+              Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <FontIcon Glyph="&#xE721;" FontSize="13" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1"
+                     x:Name="SearchBox"
+                     PlaceholderText="Search findings (Esc to close)"
+                     TextChanged="SearchBox_TextChanged"
+                     KeyDown="SearchBox_KeyDown" />
+            <TextBlock Grid.Column="2"
+                       x:Name="MatchCount"
+                       VerticalAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       FontSize="12" />
+            <Button Grid.Column="3" Click="CloseSearch_Click" Padding="6,4,6,4"
+                    ToolTipService.ToolTip="Close (Esc)">
+                <FontIcon Glyph="&#xE894;" FontSize="12" />
+            </Button>
+        </Grid>
+
+        <ScrollViewer Grid.Row="5">
+            <local:FindingsList x:Name="List" />
+        </ScrollViewer>
+    </Grid>
+</UserControl>
