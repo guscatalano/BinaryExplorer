@@ -304,6 +304,21 @@ public sealed class InterfacesInspector : IBinaryInspector
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var span = (ReadOnlySpan<byte>)bytes;
         int dispatchTableOffsetInStruct = pe32Plus ? 48 : 44;
+        // RPC_SERVER_INTERFACE / RPC_CLIENT_INTERFACE share the same layout and size.
+        int expectedLength = pe32Plus ? 96 : 68;
+
+        // Pre-compute executable section ranges (RVA + size) so we can validate method pointers.
+        var execSections = pe.PEHeaders.SectionHeaders
+            .Where(s => (s.SectionCharacteristics & SectionCharacteristics.MemExecute) != 0)
+            .Select(s => (Start: (uint)s.VirtualAddress, End: (uint)(s.VirtualAddress + s.VirtualSize)))
+            .ToArray();
+        bool RvaIsExecutable(uint rva)
+        {
+            if (rva == 0) return false;
+            foreach (var (start, end) in execSections)
+                if (rva >= start && rva < end) return true;
+            return false;
+        }
 
         foreach (var (needle, name) in new[] { (Ndr20Bytes, "NDR20"), (Ndr64Bytes, "NDR64") })
         {
@@ -316,11 +331,11 @@ public sealed class InterfacesInspector : IBinaryInspector
                 from = abs + 1;
 
                 int structStart = abs - 24;
-                if (structStart < 0 || structStart + 44 > bytes.Length) continue;
+                if (structStart < 0 || structStart + expectedLength > bytes.Length) continue;
 
                 int length = BitConverter.ToInt32(bytes, structStart);
-                if (length < 44 || length > 256) continue;
-                if (structStart + length > bytes.Length) continue;
+                // Exact match per bitness — drops misaligned hits and stray NDR UUIDs.
+                if (length != expectedLength) continue;
 
                 var uuid = new Guid(bytes.AsSpan(structStart + 4, 16));
                 if (uuid == Guid.Empty) continue;
@@ -331,21 +346,30 @@ public sealed class InterfacesInspector : IBinaryInspector
                 string key = $"{uuid:N}_{major}.{minor}";
                 if (!seen.Add(key)) continue;
 
-                // Read the DispatchTable pointer from RPC_SERVER_INTERFACE.
+                // Resolve DispatchTable → DispatchTableCount + function pointer array.
                 int methodCount = 0;
                 List<uint> methodRvas = new();
-                if (structStart + dispatchTableOffsetInStruct + (pe32Plus ? 8 : 4) <= bytes.Length)
+                ulong dispatchTableVa = pe32Plus
+                    ? BitConverter.ToUInt64(bytes, structStart + dispatchTableOffsetInStruct)
+                    : BitConverter.ToUInt32(bytes, structStart + dispatchTableOffsetInStruct);
+                var (count, fnsArrayVa) = ReadDispatchTable(bytes, pe, imageBase, pe32Plus, dispatchTableVa);
+                if (count > 0 && count <= 256)
                 {
-                    ulong dispatchTableVa = pe32Plus
-                        ? BitConverter.ToUInt64(bytes, structStart + dispatchTableOffsetInStruct)
-                        : BitConverter.ToUInt32(bytes, structStart + dispatchTableOffsetInStruct);
-                    var (count, fnsArrayVa) = ReadDispatchTable(bytes, pe, imageBase, pe32Plus, dispatchTableVa);
-                    if (count > 0 && count <= 1024)
+                    var allRvas = ReadFunctionPointers(bytes, pe, imageBase, pe32Plus, fnsArrayVa, count);
+                    // Every method pointer must resolve into an executable section. Otherwise the
+                    // DispatchTable likely belongs to a client-side interface (often null) or we hit
+                    // a false-positive struct that happens to embed the NDR UUID.
+                    bool allValid = allRvas.Count == count && allRvas.All(RvaIsExecutable);
+                    if (allValid)
                     {
                         methodCount = count;
-                        methodRvas = ReadFunctionPointers(bytes, pe, imageBase, pe32Plus, fnsArrayVa, count);
+                        methodRvas = allRvas;
                     }
                 }
+
+                // Drop entries with no validated methods — they're almost always client-side
+                // RPC_CLIENT_INTERFACE structs, not exposed server interfaces.
+                if (methodCount == 0) continue;
 
                 hits.Add(new RpcServerInterface(
                     uuid.ToString("B").ToUpperInvariant(),
