@@ -18,6 +18,12 @@ public sealed partial class YaraPage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         YaraPathBox.Text = Settings.YaraExePath;
+        if (string.IsNullOrEmpty(Settings.YaraRulesPath))
+        {
+            var bundled = System.IO.Path.Combine(AppContext.BaseDirectory, "tools", "yara", "default.yar");
+            if (System.IO.File.Exists(bundled))
+                Settings.YaraRulesPath = bundled;
+        }
         RulesPathBox.Text = Settings.YaraRulesPath ?? "";
     }
 

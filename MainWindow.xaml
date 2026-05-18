@@ -95,6 +95,9 @@
                         <NavigationViewItem Content="Capabilities" Tag="capabilities">
                             <NavigationViewItem.Icon><FontIcon Glyph="&#xE7C1;" /></NavigationViewItem.Icon>
                         </NavigationViewItem>
+                        <NavigationViewItem Content="COM / RPC" Tag="interfaces">
+                            <NavigationViewItem.Icon><FontIcon Glyph="&#xE968;" /></NavigationViewItem.Icon>
+                        </NavigationViewItem>
                         <NavigationViewItem Content="Strings &amp; IOCs" Tag="strings">
                             <NavigationViewItem.Icon><FontIcon Glyph="&#xE8C8;" /></NavigationViewItem.Icon>
                         </NavigationViewItem>

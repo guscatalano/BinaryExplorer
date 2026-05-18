@@ -1,6 +1,8 @@
+using System.Reflection;
 using System.Reflection.PortableExecutable;
 using System.Text;
 using System.Text.Json;
+using BinaryExplorer.Analysis;
 using BinaryExplorer.Core;
 using BinaryExplorer.Inspectors;
 using Iced.Intel;
@@ -73,6 +75,99 @@ internal static class McpTools
                 required = new[] { "path", "offset" },
             },
         },
+        new
+        {
+            name = "list_imports",
+            description = "Return the PE's static import table grouped by DLL, with named functions and ordinal imports.",
+            inputSchema = StringPathOnly("Filesystem path to a Windows PE binary."),
+        },
+        new
+        {
+            name = "list_exports",
+            description = "Return the PE's named exports with their RVAs.",
+            inputSchema = StringPathOnly("Filesystem path to a Windows PE binary."),
+        },
+        new
+        {
+            name = "find_function_starts",
+            description = "Run the whole-binary analyzer and return every detected function (confirmed=entry/exports/TLS, discovered=call targets) with RVA + section.",
+            inputSchema = StringPathOnly("Filesystem path to a Windows PE binary."),
+        },
+        new
+        {
+            name = "search_bytes",
+            description = "Find a byte pattern anywhere in the file. Pattern accepts hex with optional spaces ('4D 5A 90 00' or '4D5A9000') or a quoted ASCII string (\"MZ\"). Returns file offsets.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    pattern = new { type = "string", description = "Hex bytes or ASCII string. Wildcards not supported in v1." },
+                    max = new { type = "integer", description = "Max matches to return. Default 1000.", minimum = 1, maximum = 100000 },
+                },
+                required = new[] { "path", "pattern" },
+            },
+        },
+        new
+        {
+            name = "find_string_refs",
+            description = "Locate occurrences of an ASCII/UTF-16LE string in the binary, and return raw-byte references to each occurrence's VA elsewhere in the file (helps find code that points at the string).",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    @string = new { type = "string", description = "The string to look for." },
+                },
+                required = new[] { "path", "string" },
+            },
+        },
+        new
+        {
+            name = "extract_embedded",
+            description = "Extract a slice of the binary to a temp file. If 'size' is omitted, the size is auto-detected via the same logic the Embedded Files inspector uses; if that fails, defaults to min(EOF-offset, 32MB). Returns the temp file path so you can re-inspect the dropped blob.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    offset = new { type = "string", description = "Starting file offset (0x... or decimal)." },
+                    size = new { type = "string", description = "Optional explicit byte count." },
+                    extension = new { type = "string", description = "Optional file extension for the temp file (e.g. '.zip', '.cab', '.exe')." },
+                },
+                required = new[] { "path", "offset" },
+            },
+        },
+        new
+        {
+            name = "list_cab_files",
+            description = "Parse a Microsoft Cabinet (.cab) archive header and return its file table with names, sizes, dates, and folder indexes.",
+            inputSchema = StringPathOnly("Filesystem path to a .cab archive or to a file with a CAB header starting at offset 0."),
+        },
+        new
+        {
+            name = "query_msi_table",
+            description = "Open a Windows Installer .msi database read-only and return every row of one table (e.g. File, Registry, Shortcut, Property, Feature, Component, Directory, CustomAction, LaunchCondition). Uses the local Windows Installer API via COM.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string", description = "Filesystem path to an .msi (or .msm) database." },
+                    table = new { type = "string", description = "MSI table name." },
+                },
+                required = new[] { "path", "table" },
+            },
+        },
+        new
+        {
+            name = "summarize_msi",
+            description = "Open a Windows Installer .msi and return a structured summary: product info (ProductName, ProductCode, ProductVersion, Manufacturer, UpgradeCode), files dropped, registry writes, shortcuts created, custom actions, features. The single-call equivalent of 'inspect' for installers.",
+            inputSchema = StringPathOnly("Filesystem path to an .msi database."),
+        },
     };
 
     public static async Task<McpJsonRpcResponse> CallAsync(object? id, string name, JsonElement args)
@@ -81,10 +176,19 @@ internal static class McpTools
         {
             object? payload = name switch
             {
-                "list_inspectors" => new { inspectors = BinaryLoader.DefaultInspectors.Select(i => i.Name).ToArray() },
-                "inspect"      => await InspectAsync(args),
-                "disassemble"  => await Task.Run(() => Disassemble(args)),
-                "read_bytes"   => await Task.Run(() => ReadBytes(args)),
+                "list_inspectors"      => new { inspectors = BinaryLoader.DefaultInspectors.Select(i => i.Name).ToArray() },
+                "inspect"              => await InspectAsync(args),
+                "disassemble"          => await Task.Run(() => Disassemble(args)),
+                "read_bytes"           => await Task.Run(() => ReadBytes(args)),
+                "list_imports"         => await Task.Run(() => ListImports(args)),
+                "list_exports"         => await Task.Run(() => ListExports(args)),
+                "find_function_starts" => await Task.Run(() => FindFunctionStarts(args)),
+                "search_bytes"         => await Task.Run(() => SearchBytes(args)),
+                "find_string_refs"     => await Task.Run(() => FindStringRefs(args)),
+                "extract_embedded"     => await ExtractEmbedded(args),
+                "list_cab_files"       => await Task.Run(() => ListCabFiles(args)),
+                "query_msi_table"      => await Task.Run(() => QueryMsiTable(args)),
+                "summarize_msi"        => await Task.Run(() => SummarizeMsi(args)),
                 _ => null,
             };
             if (payload is null) return ErrorContent(id, $"Unknown tool: {name}");
@@ -103,6 +207,8 @@ internal static class McpTools
 
     private static McpJsonRpcResponse ErrorContent(object? id, string text) =>
         new(id, new { content = new object[] { new { type = "text", text } }, isError = true }, null);
+
+    // ===================== inspect =====================
 
     private static async Task<object> InspectAsync(JsonElement args)
     {
@@ -134,15 +240,11 @@ internal static class McpTools
                 error = r.Error,
                 findings = r.Findings.Select(f => new
                 {
-                    f.Title,
-                    f.Value,
-                    f.Details,
-                    severity = f.Severity.ToString(),
+                    f.Title, f.Value, f.Details, severity = f.Severity.ToString(),
                 }).ToArray(),
             };
         }
 
-        // Run all inspectors in parallel.
         var inspectors = BinaryLoader.DefaultInspectors;
         var tasks = inspectors.Select(i => i.InspectAsync(ctx)).ToArray();
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -158,16 +260,13 @@ internal static class McpTools
                 headline = r.Headline,
                 error = r.Error,
                 findingCount = r.Findings.Count,
-                findings = r.Findings.Take(PreviewCap).Select(f => new
-                {
-                    f.Title,
-                    f.Value,
-                    severity = f.Severity.ToString(),
-                }).ToArray(),
+                findings = r.Findings.Take(PreviewCap).Select(f => new { f.Title, f.Value, severity = f.Severity.ToString() }).ToArray(),
                 truncated = r.Findings.Count > PreviewCap,
             }).ToArray(),
         };
     }
+
+    // ===================== disassemble =====================
 
     private static object Disassemble(JsonElement args)
     {
@@ -228,6 +327,8 @@ internal static class McpTools
         return new { bitness, imageBase = "0x" + imageBase.ToString("X"), instructions };
     }
 
+    // ===================== read_bytes =====================
+
     private static object ReadBytes(JsonElement args)
     {
         string path = RequirePath(args);
@@ -250,8 +351,7 @@ internal static class McpTools
             int end = Math.Min(row + 16, slice.Length);
             for (int i = row; i < row + 16; i++)
             {
-                if (i < end) sb.Append(slice[i].ToString("X2"));
-                else sb.Append("  ");
+                if (i < end) sb.Append(slice[i].ToString("X2")); else sb.Append("  ");
                 sb.Append(' ');
                 if (i == row + 7) sb.Append(' ');
             }
@@ -271,6 +371,386 @@ internal static class McpTools
             base64 = Convert.ToBase64String(slice),
         };
     }
+
+    // ===================== list_imports / list_exports =====================
+
+    private static object ListImports(JsonElement args)
+    {
+        string path = RequirePath(args);
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var dlls = PeImports.Read(pe, out _);
+        return new
+        {
+            path = ctx.Path,
+            dllCount = dlls.Count,
+            imports = dlls.Select(d => new
+            {
+                dll = d.Dll,
+                functions = d.Functions,
+                ordinals = d.Ordinals,
+            }).ToArray(),
+        };
+    }
+
+    private static object ListExports(JsonElement args)
+    {
+        string path = RequirePath(args);
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var exports = InterfacesInspector.ReadExports(ctx.Bytes, pe);
+        return new
+        {
+            path = ctx.Path,
+            count = exports.Count,
+            exports = exports.Select(e => new { name = e.Name, rva = "0x" + e.Rva.ToString("X") }).ToArray(),
+        };
+    }
+
+    // ===================== find_function_starts =====================
+
+    private static object FindFunctionStarts(JsonElement args)
+    {
+        string path = RequirePath(args);
+        var ctx = new BinaryContext(path);
+        var idx = PeAnalysis.Analyze(ctx);
+        if (!idx.Supported)
+            return new { error = "Unsupported machine architecture (x86/x64 only)." };
+        return new
+        {
+            path = ctx.Path,
+            bitness = idx.Bitness,
+            imageBase = "0x" + idx.ImageBase.ToString("X"),
+            functionCount = idx.Functions.Count,
+            functions = idx.Functions.Select(f => new
+            {
+                name = f.Name,
+                rva = "0x" + f.Rva.ToString("X"),
+                confirmed = f.Confirmed,
+                section = f.Section,
+            }).ToArray(),
+        };
+    }
+
+    // ===================== search_bytes =====================
+
+    private static object SearchBytes(JsonElement args)
+    {
+        string path = RequirePath(args);
+        string pattern = args.TryGetProperty("pattern", out var pe) && pe.ValueKind == JsonValueKind.String
+            ? pe.GetString() ?? "" : "";
+        int max = args.TryGetProperty("max", out var me) && me.TryGetInt32(out int m)
+            ? Math.Clamp(m, 1, 100000) : 1000;
+        if (string.IsNullOrEmpty(pattern))
+            return new { error = "Missing 'pattern' argument." };
+
+        byte[]? needle = TryParsePattern(pattern);
+        if (needle is null || needle.Length == 0)
+            return new { error = $"Couldn't parse pattern: '{pattern}'." };
+
+        var bytes = System.IO.File.ReadAllBytes(path);
+        var hits = new List<long>();
+        var span = (ReadOnlySpan<byte>)bytes;
+        var nspan = (ReadOnlySpan<byte>)needle;
+
+        int from = 0;
+        while (hits.Count < max && from <= span.Length - nspan.Length)
+        {
+            int idx = span.Slice(from).IndexOf(nspan);
+            if (idx < 0) break;
+            hits.Add(from + idx);
+            from = from + idx + 1;
+        }
+
+        return new
+        {
+            path,
+            patternLength = needle.Length,
+            matchCount = hits.Count,
+            truncated = hits.Count >= max,
+            offsets = hits.Select(o => "0x" + o.ToString("X")).ToArray(),
+        };
+    }
+
+    private static byte[]? TryParsePattern(string s)
+    {
+        s = s.Trim();
+        if (s.StartsWith("\"") && s.EndsWith("\"") && s.Length >= 2)
+            return Encoding.ASCII.GetBytes(s.Substring(1, s.Length - 2));
+        // Hex with optional spaces.
+        var hex = new StringBuilder(s.Length);
+        foreach (var c in s) if (!char.IsWhiteSpace(c)) hex.Append(c);
+        if (hex.Length == 0 || hex.Length % 2 != 0) return null;
+        var bytes = new byte[hex.Length / 2];
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            if (!byte.TryParse(hex.ToString().AsSpan(i * 2, 2),
+                System.Globalization.NumberStyles.HexNumber, null, out bytes[i]))
+                return null;
+        }
+        return bytes;
+    }
+
+    // ===================== find_string_refs =====================
+
+    private static object FindStringRefs(JsonElement args)
+    {
+        string path = RequirePath(args);
+        string s = args.TryGetProperty("string", out var se) && se.ValueKind == JsonValueKind.String
+            ? se.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(s)) return new { error = "Missing 'string' argument." };
+
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var opt = pe.PEHeaders.PEHeader;
+        ulong imageBase = opt?.ImageBase ?? 0;
+        bool pe32Plus = opt?.Magic == PEMagic.PE32Plus;
+        int ptrSize = pe32Plus ? 8 : 4;
+
+        var asciiBytes = Encoding.ASCII.GetBytes(s);
+        var wideBytes = Encoding.Unicode.GetBytes(s);
+
+        var stringLocations = new List<(long FileOffset, string Encoding)>();
+        var span = (ReadOnlySpan<byte>)ctx.Bytes;
+        FindAll(span, asciiBytes, "ASCII", stringLocations);
+        FindAll(span, wideBytes, "UTF-16LE", stringLocations);
+
+        // For each found location, compute its VA via RVA->file mapping in reverse.
+        var refs = new List<object>();
+        if (opt is not null)
+        {
+            foreach (var (fileOff, enc) in stringLocations)
+            {
+                long? rva = FileOffsetToRva(pe, (int)fileOff);
+                if (rva is null) continue;
+                ulong va = imageBase + (ulong)rva.Value;
+                var vaBytes = pe32Plus
+                    ? BitConverter.GetBytes((ulong)va)
+                    : BitConverter.GetBytes((uint)va);
+                int from = 0;
+                int matchCount = 0;
+                while (matchCount < 200 && from <= span.Length - vaBytes.Length)
+                {
+                    int idx = span.Slice(from).IndexOf((ReadOnlySpan<byte>)vaBytes);
+                    if (idx < 0) break;
+                    int hitOff = from + idx;
+                    if (hitOff != (int)fileOff)
+                    {
+                        long? hitRva = FileOffsetToRva(pe, hitOff);
+                        refs.Add(new
+                        {
+                            referencedStringFileOffset = "0x" + fileOff.ToString("X"),
+                            referencedStringEncoding = enc,
+                            referencedStringVa = "0x" + va.ToString("X"),
+                            refFileOffset = "0x" + hitOff.ToString("X"),
+                            refRva = hitRva is long r ? "0x" + r.ToString("X") : null,
+                        });
+                        matchCount++;
+                    }
+                    from = hitOff + 1;
+                }
+            }
+        }
+
+        return new
+        {
+            path,
+            stringHits = stringLocations.Select(l => new
+            {
+                fileOffset = "0x" + l.FileOffset.ToString("X"),
+                encoding = l.Encoding,
+            }).ToArray(),
+            references = refs,
+        };
+    }
+
+    private static void FindAll(ReadOnlySpan<byte> haystack, byte[] needle, string label, List<(long, string)> sink)
+    {
+        if (needle.Length == 0) return;
+        int from = 0;
+        while (from <= haystack.Length - needle.Length)
+        {
+            int idx = haystack.Slice(from).IndexOf((ReadOnlySpan<byte>)needle);
+            if (idx < 0) break;
+            sink.Add((from + idx, label));
+            from = from + idx + 1;
+        }
+    }
+
+    private static long? FileOffsetToRva(PEReader pe, int fileOffset)
+    {
+        foreach (var s in pe.PEHeaders.SectionHeaders)
+        {
+            if (fileOffset >= s.PointerToRawData && fileOffset < s.PointerToRawData + s.SizeOfRawData)
+                return (long)(s.VirtualAddress + (fileOffset - s.PointerToRawData));
+        }
+        return null;
+    }
+
+    // ===================== extract_embedded =====================
+
+    private static async Task<object> ExtractEmbedded(JsonElement args)
+    {
+        string path = RequirePath(args);
+        if (!TryParseNumber(args.GetProperty("offset"), out long offset))
+            return new { error = "Couldn't parse 'offset'." };
+
+        long? explicitSize = null;
+        if (args.TryGetProperty("size", out var se) && TryParseNumber(se, out long explicitS))
+            explicitSize = explicitS;
+        string? extOverride = args.TryGetProperty("extension", out var xe) && xe.ValueKind == JsonValueKind.String
+            ? xe.GetString() : null;
+
+        var ctx = new BinaryContext(path);
+        if (offset < 0 || offset >= ctx.Bytes.LongLength)
+            return new { error = $"Offset 0x{offset:X} out of range (size {ctx.Bytes.LongLength})." };
+
+        // Try to find a matching EmbeddedHit for size auto-detect.
+        EmbeddedHit? matched = null;
+        if (explicitSize is null)
+        {
+            var emb = new EmbeddedFilesInspector();
+            var res = await emb.InspectAsync(ctx).ConfigureAwait(false);
+            if (res.Payload is IEnumerable<EmbeddedHit> hits)
+                matched = hits.FirstOrDefault(h => h.Offset == offset);
+        }
+
+        long size = explicitSize
+            ?? matched?.Size
+            ?? Math.Min(ctx.Bytes.LongLength - offset, 32L * 1024 * 1024);
+
+        string ext = extOverride ?? matched?.SuggestedExtension ?? ".bin";
+        string typeLabel = matched?.Type ?? "blob";
+        string stem = System.IO.Path.GetFileNameWithoutExtension(path);
+        string fileName = $"{stem}_+{offset:X8}_{Sanitize(typeLabel)}{ext}";
+        string outDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BinaryExplorer");
+        System.IO.Directory.CreateDirectory(outDir);
+        string outPath = System.IO.Path.Combine(outDir, fileName);
+
+        await using (var fs = new System.IO.FileStream(outPath, System.IO.FileMode.Create, System.IO.FileAccess.Write))
+            await fs.WriteAsync(ctx.Bytes.AsMemory((int)offset, (int)size)).ConfigureAwait(false);
+
+        return new
+        {
+            path = outPath,
+            offsetHex = "0x" + offset.ToString("X"),
+            size,
+            detectedType = matched?.Type,
+            sizeAutoDetected = matched is not null && explicitSize is null,
+        };
+    }
+
+    private static string Sanitize(string s)
+    {
+        var invalid = System.IO.Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s) sb.Append(Array.IndexOf(invalid, c) >= 0 || c == ' ' || c == '/' ? '_' : c);
+        return sb.ToString();
+    }
+
+    // ===================== list_cab_files =====================
+
+    private static object ListCabFiles(JsonElement args)
+    {
+        string path = RequirePath(args);
+        var bytes = System.IO.File.ReadAllBytes(path);
+        return ParseCabHeader(bytes, 0);
+    }
+
+    /// <summary>
+    /// CAB header layout per [MS-CAB]. Returns a structured representation or { error }.
+    /// </summary>
+    private static object ParseCabHeader(byte[] bytes, int baseOffset)
+    {
+        if (baseOffset + 36 > bytes.Length) return new { error = "Not enough bytes for CAB header." };
+        if (!(bytes[baseOffset] == 'M' && bytes[baseOffset + 1] == 'S'
+            && bytes[baseOffset + 2] == 'C' && bytes[baseOffset + 3] == 'F'))
+            return new { error = "Missing 'MSCF' signature at offset 0." };
+
+        uint cbCabinet = BitConverter.ToUInt32(bytes, baseOffset + 8);
+        uint coffFiles = BitConverter.ToUInt32(bytes, baseOffset + 16);
+        ushort cFolders = BitConverter.ToUInt16(bytes, baseOffset + 26);
+        ushort cFiles = BitConverter.ToUInt16(bytes, baseOffset + 28);
+        ushort flags = BitConverter.ToUInt16(bytes, baseOffset + 30);
+
+        int p = baseOffset + (int)coffFiles;
+        var files = new List<object>();
+        for (int i = 0; i < cFiles && p + 16 < bytes.Length; i++)
+        {
+            uint cbFile = BitConverter.ToUInt32(bytes, p);
+            uint uoffFolderStart = BitConverter.ToUInt32(bytes, p + 4);
+            ushort iFolder = BitConverter.ToUInt16(bytes, p + 8);
+            ushort date = BitConverter.ToUInt16(bytes, p + 10);
+            ushort time = BitConverter.ToUInt16(bytes, p + 12);
+            ushort attribs = BitConverter.ToUInt16(bytes, p + 14);
+            int nameStart = p + 16;
+            int nameEnd = nameStart;
+            // CAB filenames are typically ASCII; UTF-8 when attribs & 0x80 (cffileNAME_IS_UTF).
+            while (nameEnd < bytes.Length && bytes[nameEnd] != 0) nameEnd++;
+            if (nameEnd >= bytes.Length) break;
+            string name = (attribs & 0x80) != 0
+                ? Encoding.UTF8.GetString(bytes, nameStart, nameEnd - nameStart)
+                : Encoding.ASCII.GetString(bytes, nameStart, nameEnd - nameStart);
+            files.Add(new
+            {
+                name,
+                size = cbFile,
+                folderIndex = iFolder,
+                offsetInFolder = "0x" + uoffFolderStart.ToString("X"),
+                attribs = "0x" + attribs.ToString("X"),
+                date = DecodeCabDate(date, time),
+            });
+            p = nameEnd + 1;
+        }
+
+        return new
+        {
+            cabinetSize = cbCabinet,
+            folders = cFolders,
+            files = cFiles,
+            flags = "0x" + flags.ToString("X"),
+            firstFileOffset = "0x" + coffFiles.ToString("X"),
+            entries = files,
+        };
+    }
+
+    private static string DecodeCabDate(ushort date, ushort time)
+    {
+        try
+        {
+            int y = ((date >> 9) & 0x7F) + 1980;
+            int m = (date >> 5) & 0x0F;
+            int d = date & 0x1F;
+            int h = (time >> 11) & 0x1F;
+            int mi = (time >> 5) & 0x3F;
+            int s = (time & 0x1F) * 2;
+            return new DateTime(y, m == 0 ? 1 : m, d == 0 ? 1 : d, h, mi, s).ToString("u");
+        }
+        catch { return "?"; }
+    }
+
+    // ===================== query_msi_table / summarize_msi =====================
+
+    private static object QueryMsiTable(JsonElement args)
+    {
+        string path = RequirePath(args);
+        string table = args.TryGetProperty("table", out var te) && te.ValueKind == JsonValueKind.String
+            ? te.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(table))
+            return new { error = "Missing 'table' argument." };
+        return MsiQuery.Query(path, table);
+    }
+
+    private static object SummarizeMsi(JsonElement args)
+    {
+        string path = RequirePath(args);
+        return MsiQuery.Summarize(path);
+    }
+
+    // ===================== helpers =====================
 
     private static string RequirePath(JsonElement args)
     {
@@ -292,4 +772,14 @@ internal static class McpTools
             return long.TryParse(s.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out value);
         return long.TryParse(s, out value);
     }
+
+    private static object StringPathOnly(string desc) => new
+    {
+        type = "object",
+        properties = new
+        {
+            path = new { type = "string", description = desc },
+        },
+        required = new[] { "path" },
+    };
 }

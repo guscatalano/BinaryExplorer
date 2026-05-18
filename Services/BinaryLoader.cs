@@ -16,6 +16,7 @@ public static class BinaryLoader
         new EtwInspector(),
         new DependenciesInspector(),
         new CapabilitiesInspector(),
+        new InterfacesInspector(),
         new StringsInspector(),
         new PackingInspector(),
         new TlsCallbacksInspector(),

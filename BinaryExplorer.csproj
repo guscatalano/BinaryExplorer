@@ -13,8 +13,6 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- Keep the sibling MCP console project out of the WinUI3 implicit globs. -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);BinaryExplorer.Mcp\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,6 +25,9 @@
     <Content Include="Assets\StoreLogo.png" />
     <Content Include="Assets\AppIcon.ico" />
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <Content Include="tools\yara\*.yar">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

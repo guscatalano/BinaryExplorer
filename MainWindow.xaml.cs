@@ -132,6 +132,7 @@ public sealed partial class MainWindow : Window
                 "etw"          => typeof(EtwPage),
                 "dependencies" => typeof(DependenciesPage),
                 "capabilities" => typeof(CapabilitiesPage),
+                "interfaces"   => typeof(InterfacesPage),
                 "strings"      => typeof(StringsPage),
                 "tls"          => typeof(TlsPage),
                 "decompile"    => typeof(DecompilePage),
