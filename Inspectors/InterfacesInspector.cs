@@ -144,21 +144,41 @@ public sealed class InterfacesInspector : IBinaryInspector
                 }
 
                 // --- 2a. RPC server interfaces (parse RPC_SERVER_INTERFACE structs) ---
-                var rpcInterfaces = FindRpcServerInterfaces(context.Bytes);
+                bool pe32Plus = pe.PEHeaders.PEHeader?.Magic == PEMagic.PE32Plus;
+                ulong imageBase = pe.PEHeaders.PEHeader?.ImageBase ?? 0;
+                var exportRvaToName = exports.ToDictionary(e => e.Rva, e => e.Name);
+                var rpcInterfaces = FindRpcServerInterfaces(context.Bytes, pe, imageBase, pe32Plus);
                 if (rpcInterfaces.Count > 0)
                 {
+                    int totalMethods = rpcInterfaces.Sum(i => i.MethodCount);
                     findings.Add(new Finding(
                         "RPC server interfaces exposed",
-                        rpcInterfaces.Count.ToString(),
-                        "Parsed from RPC_SERVER_INTERFACE structures in the binary (found via NDR20/NDR64 transfer-syntax UUID).",
+                        $"{rpcInterfaces.Count} interface(s), {totalMethods} method(s)",
+                        "Parsed from RPC_SERVER_INTERFACE structures (anchored via NDR20/NDR64 transfer-syntax UUID).",
                         Severity.Warning));
                     foreach (var iface in rpcInterfaces)
                     {
                         findings.Add(new Finding(
                             $"RPC interface v{iface.MajorVersion}.{iface.MinorVersion}",
                             iface.Uuid,
-                            $"File offset: 0x{iface.FileOffset:X8}    Transfer syntax: {iface.TransferSyntax}    Struct length: {iface.StructLength} bytes",
+                            $"File offset: 0x{iface.FileOffset:X8}    Transfer syntax: {iface.TransferSyntax}    Methods: {iface.MethodCount}    Struct length: {iface.StructLength} bytes",
                             Severity.Warning));
+                        if (iface.MethodRvas.Count > 0)
+                        {
+                            var lines = new StringBuilder();
+                            for (int i = 0; i < iface.MethodRvas.Count; i++)
+                            {
+                                uint rva = iface.MethodRvas[i];
+                                string label = exportRvaToName.TryGetValue(rva, out var name)
+                                    ? name
+                                    : $"sub_{rva:X}";
+                                lines.AppendLine($"  [{i,3}]  RVA 0x{rva:X8}   {label}");
+                            }
+                            findings.Add(new Finding(
+                                "  Methods",
+                                $"{iface.MethodRvas.Count} stub address(es)",
+                                lines.ToString().TrimEnd()));
+                        }
                     }
                 }
 
@@ -244,7 +264,15 @@ public sealed class InterfacesInspector : IBinaryInspector
         }, ct);
     }
 
-    public sealed record RpcServerInterface(string Uuid, ushort MajorVersion, ushort MinorVersion, int FileOffset, string TransferSyntax, int StructLength);
+    public sealed record RpcServerInterface(
+        string Uuid,
+        ushort MajorVersion,
+        ushort MinorVersion,
+        int FileOffset,
+        string TransferSyntax,
+        int StructLength,
+        int MethodCount,
+        IReadOnlyList<uint> MethodRvas);
 
     // RPC NDR transfer-syntax UUIDs as they appear in memory (mixed endianness).
     // NDR20  = 8a885d04-1ceb-11c9-9fe8-08002b104860  → 04 5D 88 8A EB 1C C9 11 9F E8 08 00 2B 10 48 60
@@ -270,11 +298,12 @@ public sealed class InterfacesInspector : IBinaryInspector
     /// We anchor on the well-known transfer-syntax UUID, then walk back 24 bytes
     /// to the struct start and read the InterfaceId.
     /// </summary>
-    private static List<RpcServerInterface> FindRpcServerInterfaces(byte[] bytes)
+    private static List<RpcServerInterface> FindRpcServerInterfaces(byte[] bytes, PEReader pe, ulong imageBase, bool pe32Plus)
     {
         var hits = new List<RpcServerInterface>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var span = (ReadOnlySpan<byte>)bytes;
+        int dispatchTableOffsetInStruct = pe32Plus ? 48 : 44;
 
         foreach (var (needle, name) in new[] { (Ndr20Bytes, "NDR20"), (Ndr64Bytes, "NDR64") })
         {
@@ -290,7 +319,6 @@ public sealed class InterfacesInspector : IBinaryInspector
                 if (structStart < 0 || structStart + 44 > bytes.Length) continue;
 
                 int length = BitConverter.ToInt32(bytes, structStart);
-                // Sanity range: struct is 76..152 bytes for the realistic x86/x64 layouts.
                 if (length < 44 || length > 256) continue;
                 if (structStart + length > bytes.Length) continue;
 
@@ -298,19 +326,85 @@ public sealed class InterfacesInspector : IBinaryInspector
                 if (uuid == Guid.Empty) continue;
                 ushort major = BitConverter.ToUInt16(bytes, structStart + 20);
                 ushort minor = BitConverter.ToUInt16(bytes, structStart + 22);
-                // Reject implausibly high versions to filter false positives.
                 if (major > 100 || minor > 1000) continue;
 
                 string key = $"{uuid:N}_{major}.{minor}";
                 if (!seen.Add(key)) continue;
+
+                // Read the DispatchTable pointer from RPC_SERVER_INTERFACE.
+                int methodCount = 0;
+                List<uint> methodRvas = new();
+                if (structStart + dispatchTableOffsetInStruct + (pe32Plus ? 8 : 4) <= bytes.Length)
+                {
+                    ulong dispatchTableVa = pe32Plus
+                        ? BitConverter.ToUInt64(bytes, structStart + dispatchTableOffsetInStruct)
+                        : BitConverter.ToUInt32(bytes, structStart + dispatchTableOffsetInStruct);
+                    var (count, fnsArrayVa) = ReadDispatchTable(bytes, pe, imageBase, pe32Plus, dispatchTableVa);
+                    if (count > 0 && count <= 1024)
+                    {
+                        methodCount = count;
+                        methodRvas = ReadFunctionPointers(bytes, pe, imageBase, pe32Plus, fnsArrayVa, count);
+                    }
+                }
+
                 hits.Add(new RpcServerInterface(
                     uuid.ToString("B").ToUpperInvariant(),
-                    major, minor, structStart, name, length));
+                    major, minor, structStart, name, length,
+                    methodCount, methodRvas));
             }
         }
 
         hits.Sort((a, b) => string.CompareOrdinal(a.Uuid, b.Uuid));
         return hits;
+    }
+
+    /// <summary>Read RPC_DISPATCH_TABLE { uint count; padding?; void** functions; } from the binary.</summary>
+    private static (int Count, ulong FunctionsArrayVa) ReadDispatchTable(
+        byte[] bytes, PEReader pe, ulong imageBase, bool pe32Plus, ulong dispatchTableVa)
+    {
+        if (dispatchTableVa == 0 || dispatchTableVa < imageBase) return (0, 0);
+        long rva = (long)(dispatchTableVa - imageBase);
+        if (rva <= 0 || rva > int.MaxValue) return (0, 0);
+        if (!LanguageInspector.TryRvaToOffset(pe, (int)rva, out int off)) return (0, 0);
+        if (off + 16 > bytes.Length) return (0, 0);
+
+        int count = BitConverter.ToInt32(bytes, off);
+        ulong fns;
+        if (pe32Plus)
+        {
+            // x64: count(4) + padding(4) + ptr(8)
+            if (off + 12 > bytes.Length) return (0, 0);
+            fns = BitConverter.ToUInt64(bytes, off + 8);
+        }
+        else
+        {
+            // x86: count(4) + ptr(4)
+            fns = BitConverter.ToUInt32(bytes, off + 4);
+        }
+        return (count, fns);
+    }
+
+    /// <summary>Read N function pointers from an array. Returns RVAs (VA - imageBase).</summary>
+    private static List<uint> ReadFunctionPointers(
+        byte[] bytes, PEReader pe, ulong imageBase, bool pe32Plus, ulong arrayVa, int count)
+    {
+        var rvas = new List<uint>();
+        if (count <= 0 || arrayVa == 0 || arrayVa < imageBase) return rvas;
+        long rva = (long)(arrayVa - imageBase);
+        if (rva <= 0 || rva > int.MaxValue) return rvas;
+        if (!LanguageInspector.TryRvaToOffset(pe, (int)rva, out int off)) return rvas;
+        int ptrSize = pe32Plus ? 8 : 4;
+        if (off + (long)count * ptrSize > bytes.Length) return rvas;
+        for (int i = 0; i < count; i++)
+        {
+            ulong fnVa = pe32Plus
+                ? BitConverter.ToUInt64(bytes, off + i * ptrSize)
+                : BitConverter.ToUInt32(bytes, off + i * ptrSize);
+            if (fnVa < imageBase) { rvas.Add(0); continue; }
+            long fnRva = (long)(fnVa - imageBase);
+            rvas.Add(fnRva is > 0 and <= uint.MaxValue ? (uint)fnRva : 0u);
+        }
+        return rvas;
     }
 
     private static List<string> ScanGuidStrings(byte[] bytes)
