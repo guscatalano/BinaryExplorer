@@ -185,6 +185,88 @@ internal static class McpTools
         },
         new
         {
+            name = "get_string_at",
+            description = "Read a null-terminated string at a file offset. With encoding='auto' (default), decodes as UTF-16LE if the second byte is 0x00 and the first looks printable, otherwise ASCII. Returns the value, encoding chosen, and byte length.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    offset = new { type = "string", description = "File offset (0x... or decimal)." },
+                    encoding = new { type = "string", description = "'auto' (default), 'ascii', or 'utf-16le'." },
+                    maxLength = new { type = "integer", description = "Max characters to read (default 1024, max 8192).", minimum = 1, maximum = 8192 },
+                },
+                required = new[] { "path", "offset" },
+            },
+        },
+        new
+        {
+            name = "find_xrefs",
+            description = "Find every instruction that references a given VA/RVA. Walks every executable section with Iced, checking branch targets, RIP-relative memory operands, and immediate operands. Pass a VA (0x140012345) or an RVA (0x12345) — both work.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    target = new { type = "string", description = "Target address. Hex 0x... or decimal. < imageBase is treated as an RVA." },
+                    max = new { type = "integer", description = "Cap on number of references returned. Default 500.", minimum = 1, maximum = 10000 },
+                },
+                required = new[] { "path", "target" },
+            },
+        },
+        new
+        {
+            name = "get_pe_map",
+            description = "Block diagram of a PE's structure: sections (with size + characteristics) on the left, imported DLLs in the middle, embedded resources / detected blobs on the right. Default format: 'mermaid'.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    format = new { type = "string", description = "'mermaid' (default) or 'json'." },
+                },
+                required = new[] { "path" },
+            },
+        },
+        new
+        {
+            name = "get_call_graph",
+            description = "Walk calls from a starting RVA up to N levels deep. Returns a Mermaid flowchart with one node per discovered function and edges for each direct call. Indirect calls (call qword ptr [iat]) are resolved against the import address table and shown as 'dll!function' nodes.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    rva = new { type = "string", description = "Starting RVA (hex 0x... or decimal). If omitted, uses the PE entry point." },
+                    depth = new { type = "integer", description = "BFS depth from the start. Default 2, max 5.", minimum = 1, maximum = 5 },
+                    format = new { type = "string", description = "'mermaid' (default) or 'json'." },
+                },
+                required = new[] { "path" },
+            },
+        },
+        new
+        {
+            name = "get_init_sequence",
+            description = "Mermaid sequence diagram of the init chain. Starts at the PE entry point (or the supplied RVA) and follows the first call at each level until it hits an import or runs out of depth.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    rva = new { type = "string", description = "Optional starting RVA; defaults to the PE entry point." },
+                    depth = new { type = "integer", description = "Max levels of nesting. Default 8.", minimum = 1, maximum = 32 },
+                    format = new { type = "string", description = "'mermaid' (default) or 'json'." },
+                },
+                required = new[] { "path" },
+            },
+        },
+        new
+        {
             name = "extract_resource",
             description = "Extract a single PE resource entry to a temp file. The matched resource is written verbatim (e.g. the embedded driver in procmon64.exe's RT_RCDATA can be extracted and then inspected with 'inspect').",
             inputSchema = new
@@ -230,6 +312,11 @@ internal static class McpTools
                 "summarize_msi"        => await Task.Run(() => SummarizeMsi(args)),
                 "dump_section"         => await Task.Run(() => DumpSection(args)),
                 "extract_resource"     => await Task.Run(() => ExtractResource(args)),
+                "get_string_at"        => await Task.Run(() => GetStringAt(args)),
+                "find_xrefs"           => await Task.Run(() => FindXrefs(args)),
+                "get_pe_map"           => await Task.Run(() => GetPeMap(args)),
+                "get_call_graph"       => await Task.Run(() => GetCallGraph(args)),
+                "get_init_sequence"    => await Task.Run(() => GetInitSequence(args)),
                 _ => null,
             };
             if (payload is null) return ErrorContent(id, $"Unknown tool: {name}");
@@ -338,6 +425,9 @@ internal static class McpTools
         var formatter = new MasmFormatter();
         formatter.Options.DigitSeparator = "";
 
+        bool pe32Plus = opt.Magic == PEMagic.PE32Plus;
+        var iatMap = BuildIatMap(pe, ctx.Bytes, imageBase, pe32Plus);
+
         var instructions = new List<object>();
         int produced = 0;
         while (produced < count)
@@ -353,11 +443,31 @@ internal static class McpTools
                 hex.Append(ctx.Bytes[fileOff + (int)(ip - (imageBase + rva)) + i].ToString("X2"));
                 if (i + 1 < len) hex.Append(' ');
             }
+
+            // IAT annotation: when the instruction touches a memory operand whose effective
+            // address equals an IAT slot VA, surface the imported "dll!function" name.
+            string? annotation = null;
+            for (int i = 0; i < instr.OpCount; i++)
+            {
+                if (instr.GetOpKind(i) != OpKind.Memory) continue;
+                ulong memAddr = instr.IsIPRelativeMemoryOperand
+                    ? instr.IPRelativeMemoryAddress
+                    : ((instr.MemoryBase == Register.None && instr.MemoryIndex == Register.None)
+                       ? (ulong)instr.MemoryDisplacement64
+                       : 0UL);
+                if (memAddr != 0 && iatMap.TryGetValue(memAddr, out var name))
+                {
+                    annotation = name;
+                    break;
+                }
+            }
+
             instructions.Add(new
             {
                 ip = "0x" + ip.ToString("X16"),
                 bytes = hex.ToString(),
                 text = output.ToString(),
+                importTarget = annotation,
                 isInvalid = instr.IsInvalid,
                 flowControl = instr.FlowControl.ToString(),
             });
@@ -421,16 +531,43 @@ internal static class McpTools
         var ctx = new BinaryContext(path);
         using var ms = new MemoryStream(ctx.Bytes, writable: false);
         using var pe = new PEReader(ms);
+        var opt = pe.PEHeaders.PEHeader;
+        bool pe32Plus = opt?.Magic == PEMagic.PE32Plus;
+        ulong imageBase = opt?.ImageBase ?? 0;
+
         var dlls = PeImports.Read(pe, out _);
+        var iatMap = BuildIatMap(pe, ctx.Bytes, imageBase, pe32Plus);
+        // Invert the IAT map (slot VA -> "dll!function") to "dll!function" -> slot VA so we
+        // can look up each function's slot.
+        var slotByFn = new Dictionary<string, ulong>(StringComparer.Ordinal);
+        foreach (var kv in iatMap) slotByFn[kv.Value] = kv.Key;
+
         return new
         {
             path = ctx.Path,
+            imageBase = "0x" + imageBase.ToString("X"),
             dllCount = dlls.Count,
-            imports = dlls.Select(d => new
+            imports = dlls.Select(d =>
             {
-                dll = d.Dll,
-                functions = d.Functions,
-                ordinals = d.Ordinals,
+                string norm = d.Dll;
+                foreach (var ext in new[] { ".dll", ".DLL" })
+                    if (norm.EndsWith(ext)) { norm = norm[..^ext.Length]; break; }
+                return new
+                {
+                    dll = d.Dll,
+                    functions = d.Functions.Select(fn =>
+                    {
+                        string key = $"{norm}!{fn}";
+                        slotByFn.TryGetValue(key, out var slotVa);
+                        return new
+                        {
+                            name = fn,
+                            iatSlotVa = slotVa == 0 ? null : "0x" + slotVa.ToString("X"),
+                            iatSlotRva = slotVa == 0 ? null : "0x" + (slotVa - imageBase).ToString("X"),
+                        };
+                    }).ToArray(),
+                    ordinals = d.Ordinals,
+                };
             }).ToArray(),
         };
     }
@@ -774,6 +911,560 @@ internal static class McpTools
     }
 
     // ===================== query_msi_table / summarize_msi =====================
+
+    // ===================== get_string_at =====================
+
+    private static object GetStringAt(JsonElement args)
+    {
+        string path = RequirePath(args);
+        if (!TryParseNumber(args.GetProperty("offset"), out long offset))
+            return new { error = "Couldn't parse 'offset'." };
+        string requestedEncoding = args.TryGetProperty("encoding", out var ee) && ee.ValueKind == JsonValueKind.String
+            ? ee.GetString() ?? "auto" : "auto";
+        int maxLen = args.TryGetProperty("maxLength", out var me) && me.TryGetInt32(out int m)
+            ? Math.Clamp(m, 1, 8192) : 1024;
+
+        var bytes = System.IO.File.ReadAllBytes(path);
+        if (offset < 0 || offset >= bytes.Length)
+            return new { error = $"Offset 0x{offset:X} out of range (file size {bytes.Length})." };
+
+        string encoding = requestedEncoding.ToLowerInvariant();
+        if (encoding == "auto")
+        {
+            // UTF-16LE printable: first char low byte 0x20..0x7E, second byte zero.
+            encoding = (offset + 1 < bytes.Length
+                        && bytes[offset + 1] == 0
+                        && bytes[offset] >= 0x20 && bytes[offset] < 0x7F)
+                ? "utf-16le" : "ascii";
+        }
+
+        int byteLen;
+        string value;
+        if (encoding == "utf-16le")
+        {
+            int end = (int)offset;
+            int maxBytes = Math.Min(bytes.Length - (int)offset, maxLen * 2);
+            while (end + 1 < (int)offset + maxBytes)
+            {
+                if (bytes[end] == 0 && bytes[end + 1] == 0) break;
+                end += 2;
+            }
+            byteLen = end - (int)offset;
+            value = Encoding.Unicode.GetString(bytes, (int)offset, byteLen);
+        }
+        else
+        {
+            int end = (int)offset;
+            int maxBytes = Math.Min(bytes.Length - (int)offset, maxLen);
+            while (end < (int)offset + maxBytes && bytes[end] != 0) end++;
+            byteLen = end - (int)offset;
+            value = Encoding.ASCII.GetString(bytes, (int)offset, byteLen);
+        }
+
+        return new
+        {
+            offsetHex = "0x" + offset.ToString("X"),
+            encoding,
+            byteLength = byteLen,
+            charLength = encoding == "utf-16le" ? byteLen / 2 : byteLen,
+            value,
+        };
+    }
+
+    // ===================== find_xrefs =====================
+
+    private static object FindXrefs(JsonElement args)
+    {
+        string path = RequirePath(args);
+        if (!TryParseNumber(args.GetProperty("target"), out long targetLong))
+            return new { error = "Couldn't parse 'target'." };
+        int hitCap = args.TryGetProperty("max", out var me) && me.TryGetInt32(out int m)
+            ? Math.Clamp(m, 1, 10000) : 500;
+
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var opt = pe.PEHeaders.PEHeader;
+        if (opt is null) return new { error = "Not a PE file." };
+        var machine = pe.PEHeaders.CoffHeader.Machine;
+        if (machine != Machine.Amd64 && machine != Machine.I386)
+            return new { error = "Cross-referencing requires x86/x64." };
+
+        int bitness = opt.Magic == PEMagic.PE32Plus ? 64 : 32;
+        ulong imageBase = opt.ImageBase;
+        // Allow the user to pass either a VA or a small RVA.
+        ulong targetVa = (ulong)targetLong;
+        if (targetVa < imageBase) targetVa += imageBase;
+
+        var formatter = new MasmFormatter();
+        formatter.Options.DigitSeparator = "";
+        var refs = new List<object>();
+        long instructionsScanned = 0;
+
+        foreach (var sec in pe.PEHeaders.SectionHeaders)
+        {
+            if ((sec.SectionCharacteristics & SectionCharacteristics.MemExecute) == 0) continue;
+            int off = sec.PointerToRawData;
+            int size = sec.SizeOfRawData;
+            if (off <= 0 || size <= 0 || off + size > ctx.Bytes.Length) continue;
+
+            var reader = new ByteArrayCodeReader(ctx.Bytes, off, size);
+            var decoder = Iced.Intel.Decoder.Create(bitness, reader);
+            decoder.IP = imageBase + (ulong)sec.VirtualAddress;
+            ulong endIp = decoder.IP + (ulong)size;
+
+            while (decoder.IP < endIp && refs.Count < hitCap)
+            {
+                ulong instrIp = decoder.IP;
+                decoder.Decode(out var instr);
+                instructionsScanned++;
+                if (instr.IsInvalid) continue;
+
+                bool matched = false;
+                string kind = "";
+
+                // Branch / call targets.
+                if (instr.IsCallNear || instr.IsJmpNear || instr.IsJmpShort
+                    || instr.IsJccNear || instr.IsJccShort)
+                {
+                    if (instr.NearBranch64 == targetVa) { matched = true; kind = "branch"; }
+                }
+
+                // Memory operands and immediates.
+                if (!matched)
+                {
+                    for (int i = 0; i < instr.OpCount; i++)
+                    {
+                        var kindOp = instr.GetOpKind(i);
+                        if (kindOp == OpKind.Memory)
+                        {
+                            // RIP-relative or absolute memory address.
+                            if (instr.IsIPRelativeMemoryOperand)
+                            {
+                                if (instr.IPRelativeMemoryAddress == targetVa) { matched = true; kind = "mem [rip+disp]"; break; }
+                            }
+                            else if (instr.MemoryBase == Register.None && instr.MemoryIndex == Register.None)
+                            {
+                                if ((ulong)instr.MemoryDisplacement64 == targetVa) { matched = true; kind = "mem absolute"; break; }
+                            }
+                        }
+                        else if (kindOp == OpKind.Immediate32 || kindOp == OpKind.Immediate32to64
+                              || kindOp == OpKind.Immediate64)
+                        {
+                            ulong imm = instr.GetImmediate(i);
+                            if (imm == targetVa) { matched = true; kind = "immediate"; break; }
+                        }
+                    }
+                }
+
+                if (matched)
+                {
+                    var output = new StringOutput();
+                    formatter.Format(instr, output);
+                    refs.Add(new
+                    {
+                        fromVa = "0x" + instrIp.ToString("X"),
+                        fromRva = "0x" + (instrIp - imageBase).ToString("X"),
+                        section = sec.Name,
+                        kind,
+                        text = output.ToString(),
+                    });
+                }
+            }
+        }
+
+        return new
+        {
+            path,
+            targetVa = "0x" + targetVa.ToString("X"),
+            targetRva = "0x" + (targetVa - imageBase).ToString("X"),
+            instructionsScanned,
+            referenceCount = refs.Count,
+            truncated = refs.Count >= hitCap,
+            references = refs,
+        };
+    }
+
+    // ===================== get_pe_map =====================
+
+    private static object GetPeMap(JsonElement args)
+    {
+        string path = RequirePath(args);
+        string format = ArgString(args, "format", "mermaid");
+
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var sections = pe.PEHeaders.SectionHeaders;
+        var dlls = PeImports.Read(pe, out _);
+        var resources = PeResources.Walk(ctx.Bytes);
+        var resourceTypes = resources
+            .GroupBy(r => r.TypeDisplay)
+            .Select(g => new { type = g.Key, count = g.Count(), totalBytes = g.Sum(r => (long)r.Size) })
+            .OrderByDescending(g => g.totalBytes)
+            .ToList();
+
+        if (format == "json")
+        {
+            return new
+            {
+                path = ctx.Path,
+                sections = sections.Select(s => new
+                {
+                    name = s.Name,
+                    fileOffset = "0x" + s.PointerToRawData.ToString("X"),
+                    rawSize = s.SizeOfRawData,
+                    characteristics = s.SectionCharacteristics.ToString(),
+                }).ToArray(),
+                imports = dlls.Select(d => new { dll = d.Dll, functionCount = d.Functions.Count }).ToArray(),
+                resources = resourceTypes,
+            };
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("flowchart LR");
+        sb.AppendLine($"  PE([\"{System.IO.Path.GetFileName(path)}\"])");
+        sb.AppendLine("  subgraph SECTIONS [\"Sections\"]");
+        int i = 0;
+        foreach (var s in sections)
+            sb.AppendLine($"    S{i++}[\"{Escape(s.Name)}\\n{FormatBytes(s.SizeOfRawData)}\"]");
+        sb.AppendLine("  end");
+        sb.AppendLine("  subgraph IMPORTS [\"Imports\"]");
+        i = 0;
+        foreach (var d in dlls)
+            sb.AppendLine($"    I{i++}[\"{Escape(d.Dll)}\\n{d.Functions.Count} fn(s)\"]");
+        sb.AppendLine("  end");
+        if (resourceTypes.Count > 0)
+        {
+            sb.AppendLine("  subgraph RESOURCES [\"Resources\"]");
+            i = 0;
+            foreach (var r in resourceTypes)
+                sb.AppendLine($"    R{i++}[\"{Escape(r.type)}\\n{r.count} entr(ies), {FormatBytes(r.totalBytes)}\"]");
+            sb.AppendLine("  end");
+        }
+        sb.AppendLine("  PE --> SECTIONS");
+        sb.AppendLine("  PE --> IMPORTS");
+        if (resourceTypes.Count > 0) sb.AppendLine("  PE --> RESOURCES");
+        return new { path, format = "mermaid", mermaid = sb.ToString() };
+    }
+
+    // ===================== get_call_graph =====================
+
+    private sealed record CallEdge(uint From, string ToId, string ToLabel, bool IsImport);
+
+    private static object GetCallGraph(JsonElement args)
+    {
+        string path = RequirePath(args);
+        int depth = args.TryGetProperty("depth", out var de) && de.TryGetInt32(out int d)
+            ? Math.Clamp(d, 1, 5) : 2;
+        string format = ArgString(args, "format", "mermaid");
+
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var opt = pe.PEHeaders.PEHeader ?? throw new InvalidOperationException("Not a PE file.");
+        var machine = pe.PEHeaders.CoffHeader.Machine;
+        if (machine != Machine.Amd64 && machine != Machine.I386)
+            return new { error = "Call graph is x86/x64 only." };
+        int bitness = opt.Magic == PEMagic.PE32Plus ? 64 : 32;
+        bool pe32Plus = bitness == 64;
+        ulong imageBase = opt.ImageBase;
+
+        uint startRva;
+        if (args.TryGetProperty("rva", out var re) && TryParseNumber(re, out long rl))
+            startRva = (uint)rl;
+        else
+            startRva = (uint)opt.AddressOfEntryPoint;
+        if (startRva == 0) return new { error = "No starting RVA and binary has no entry point." };
+
+        var iatMap = BuildIatMap(pe, ctx.Bytes, imageBase, pe32Plus);
+        var fnNames = new Dictionary<uint, string>();
+        foreach (var ex in InterfacesInspector.ReadExports(ctx.Bytes, pe)) fnNames[ex.Rva] = ex.Name;
+
+        var nodes = new Dictionary<uint, string>();
+        var edges = new List<CallEdge>();
+        var visited = new HashSet<uint>();
+        var queue = new Queue<(uint Rva, int D)>();
+        queue.Enqueue((startRva, 0));
+
+        while (queue.Count > 0)
+        {
+            var (rva, currentDepth) = queue.Dequeue();
+            if (!visited.Add(rva)) continue;
+            string label = fnNames.TryGetValue(rva, out var n) ? n : $"sub_{rva:X}";
+            nodes[rva] = label;
+            if (currentDepth >= depth) continue;
+
+            if (!LanguageInspector.TryRvaToOffset(pe, (int)rva, out int fileOff)) continue;
+            var reader = new ByteArrayCodeReader(ctx.Bytes, fileOff, ctx.Bytes.Length - fileOff);
+            var decoder = Iced.Intel.Decoder.Create(bitness, reader);
+            decoder.IP = imageBase + rva;
+            for (int j = 0; j < 5000; j++)
+            {
+                decoder.Decode(out var instr);
+                if (instr.IsInvalid) break;
+                if (instr.IsCallNear)
+                {
+                    long targetRva = (long)instr.NearBranch64 - (long)imageBase;
+                    if (targetRva > 0 && targetRva < uint.MaxValue)
+                    {
+                        uint tRva = (uint)targetRva;
+                        string toLabel = fnNames.TryGetValue(tRva, out var nm) ? nm : $"sub_{tRva:X}";
+                        edges.Add(new CallEdge(rva, $"N_{tRva:X}", toLabel, false));
+                        queue.Enqueue((tRva, currentDepth + 1));
+                    }
+                }
+                else if (instr.IsCallNearIndirect)
+                {
+                    for (int op = 0; op < instr.OpCount; op++)
+                    {
+                        if (instr.GetOpKind(op) != OpKind.Memory) continue;
+                        ulong memAddr = instr.IsIPRelativeMemoryOperand
+                            ? instr.IPRelativeMemoryAddress
+                            : ((instr.MemoryBase == Register.None && instr.MemoryIndex == Register.None)
+                               ? (ulong)instr.MemoryDisplacement64 : 0UL);
+                        if (memAddr != 0 && iatMap.TryGetValue(memAddr, out var importName))
+                        {
+                            string impId = "IMP_" + SanitizeId(importName);
+                            edges.Add(new CallEdge(rva, impId, importName, true));
+                            break;
+                        }
+                    }
+                }
+                if (instr.FlowControl == FlowControl.Return) break;
+            }
+        }
+
+        if (format == "json")
+        {
+            return new
+            {
+                path,
+                start = "0x" + startRva.ToString("X"),
+                nodeCount = nodes.Count,
+                edgeCount = edges.Count,
+                nodes = nodes.Select(kv => new { id = "N_" + kv.Key.ToString("X"), rva = "0x" + kv.Key.ToString("X"), label = kv.Value }).ToArray(),
+                edges = edges.Select(e => new { from = "N_" + e.From.ToString("X"), to = e.ToId, target = e.ToLabel, isImport = e.IsImport }).ToArray(),
+            };
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("flowchart TD");
+        foreach (var kv in nodes)
+            sb.AppendLine($"  N_{kv.Key:X}[\"{Escape(kv.Value)}\"]");
+        var seenImpIds = new HashSet<string>();
+        foreach (var e in edges.Where(x => x.IsImport))
+        {
+            if (seenImpIds.Add(e.ToId))
+                sb.AppendLine($"  {e.ToId}([\"{Escape(e.ToLabel)}\"])");
+        }
+        foreach (var e in edges)
+            sb.AppendLine($"  N_{e.From:X} --> {e.ToId}");
+        return new { path, format = "mermaid", start = "0x" + startRva.ToString("X"), mermaid = sb.ToString() };
+    }
+
+    // ===================== get_init_sequence =====================
+
+    private static object GetInitSequence(JsonElement args)
+    {
+        string path = RequirePath(args);
+        int depth = args.TryGetProperty("depth", out var de) && de.TryGetInt32(out int d)
+            ? Math.Clamp(d, 1, 32) : 8;
+        string format = ArgString(args, "format", "mermaid");
+
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var opt = pe.PEHeaders.PEHeader ?? throw new InvalidOperationException("Not a PE file.");
+        var machine = pe.PEHeaders.CoffHeader.Machine;
+        if (machine != Machine.Amd64 && machine != Machine.I386)
+            return new { error = "x86/x64 only." };
+        int bitness = opt.Magic == PEMagic.PE32Plus ? 64 : 32;
+        bool pe32Plus = bitness == 64;
+        ulong imageBase = opt.ImageBase;
+
+        uint startRva;
+        if (args.TryGetProperty("rva", out var re) && TryParseNumber(re, out long rl))
+            startRva = (uint)rl;
+        else
+            startRva = (uint)opt.AddressOfEntryPoint;
+        if (startRva == 0) return new { error = "No starting RVA and binary has no entry point." };
+
+        var iatMap = BuildIatMap(pe, ctx.Bytes, imageBase, pe32Plus);
+        var fnNames = new Dictionary<uint, string>();
+        foreach (var ex in InterfacesInspector.ReadExports(ctx.Bytes, pe)) fnNames[ex.Rva] = ex.Name;
+
+        // Linearly walk the first-call chain: at each function, dive into the first non-import
+        // call. Stop on import, ret, or depth limit. Records every call seen at each level.
+        var steps = new List<(string From, string To, bool IsImport)>();
+        var visited = new HashSet<uint>();
+        uint current = startRva;
+        for (int lvl = 0; lvl < depth; lvl++)
+        {
+            if (!visited.Add(current)) break;
+            string fromLabel = fnNames.TryGetValue(current, out var fn) ? fn : $"sub_{current:X}";
+            if (!LanguageInspector.TryRvaToOffset(pe, (int)current, out int fileOff)) break;
+
+            var reader = new ByteArrayCodeReader(ctx.Bytes, fileOff, ctx.Bytes.Length - fileOff);
+            var decoder = Iced.Intel.Decoder.Create(bitness, reader);
+            decoder.IP = imageBase + current;
+            uint? nextDirect = null;
+            for (int j = 0; j < 5000; j++)
+            {
+                decoder.Decode(out var instr);
+                if (instr.IsInvalid) break;
+                if (instr.IsCallNear)
+                {
+                    long tRva = (long)instr.NearBranch64 - (long)imageBase;
+                    if (tRva > 0 && tRva < uint.MaxValue)
+                    {
+                        string toLabel = fnNames.TryGetValue((uint)tRva, out var tn) ? tn : $"sub_{tRva:X}";
+                        steps.Add((fromLabel, toLabel, false));
+                        if (nextDirect is null) nextDirect = (uint)tRva;
+                    }
+                }
+                else if (instr.IsCallNearIndirect)
+                {
+                    for (int op = 0; op < instr.OpCount; op++)
+                    {
+                        if (instr.GetOpKind(op) != OpKind.Memory) continue;
+                        ulong memAddr = instr.IsIPRelativeMemoryOperand
+                            ? instr.IPRelativeMemoryAddress
+                            : ((instr.MemoryBase == Register.None && instr.MemoryIndex == Register.None)
+                               ? (ulong)instr.MemoryDisplacement64 : 0UL);
+                        if (memAddr != 0 && iatMap.TryGetValue(memAddr, out var importName))
+                            steps.Add((fromLabel, importName, true));
+                    }
+                }
+                if (instr.FlowControl == FlowControl.Return) break;
+            }
+            if (nextDirect is null) break;
+            current = nextDirect.Value;
+        }
+
+        if (format == "json")
+        {
+            return new
+            {
+                path,
+                start = "0x" + startRva.ToString("X"),
+                stepCount = steps.Count,
+                steps = steps.Select(s => new { from = s.From, to = s.To, isImport = s.IsImport }).ToArray(),
+            };
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("sequenceDiagram");
+        var participants = new HashSet<string>();
+        foreach (var s in steps)
+        {
+            if (participants.Add(s.From))
+                sb.AppendLine($"  participant {SanitizeId(s.From)} as {s.From}");
+            if (participants.Add(s.To))
+                sb.AppendLine($"  participant {SanitizeId(s.To)} as {s.To}");
+        }
+        foreach (var s in steps)
+        {
+            string arrow = s.IsImport ? "->>" : "->>+";
+            sb.AppendLine($"  {SanitizeId(s.From)} {arrow} {SanitizeId(s.To)}: call");
+        }
+        return new { path, format = "mermaid", start = "0x" + startRva.ToString("X"), mermaid = sb.ToString() };
+    }
+
+    private static string SanitizeId(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s) sb.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');
+        if (sb.Length == 0 || char.IsDigit(sb[0])) sb.Insert(0, '_');
+        return sb.ToString();
+    }
+
+    private static string Escape(string s)
+        => s.Replace("\"", "&quot;").Replace("\n", "\\n");
+
+    private static string FormatBytes(long n)
+    {
+        if (n < 1024) return $"{n} B";
+        if (n < 1024 * 1024) return $"{n / 1024.0:F1} KB";
+        return $"{n / (1024.0 * 1024):F1} MB";
+    }
+
+    private static string ArgString(JsonElement args, string name, string fallback)
+        => args.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() ?? fallback : fallback;
+
+    // ===================== IAT map helper =====================
+
+    /// <summary>Build a map from IAT slot VA -&gt; "dll!function" name. Used by disassemble to annotate `call qword ptr [iat_slot]`.</summary>
+    internal static Dictionary<ulong, string> BuildIatMap(PEReader pe, byte[] bytes, ulong imageBase, bool pe32Plus)
+    {
+        var map = new Dictionary<ulong, string>();
+        var dir = pe.PEHeaders.PEHeader?.ImportTableDirectory;
+        if (dir is null || dir.Value.Size == 0) return map;
+        if (!LanguageInspector.TryRvaToOffset(pe, dir.Value.RelativeVirtualAddress, out int offset)) return map;
+
+        int thunkSize = pe32Plus ? 8 : 4;
+        ulong ordinalFlag = pe32Plus ? 0x8000000000000000UL : 0x80000000UL;
+
+        while (offset + 20 <= bytes.Length)
+        {
+            uint originalFirstThunk = BitConverter.ToUInt32(bytes, offset);
+            uint nameRva = BitConverter.ToUInt32(bytes, offset + 12);
+            uint firstThunk = BitConverter.ToUInt32(bytes, offset + 16);
+            if (originalFirstThunk == 0 && nameRva == 0 && firstThunk == 0) break;
+
+            string dllName = "?";
+            if (nameRva != 0 && LanguageInspector.TryRvaToOffset(pe, (int)nameRva, out int nameOff))
+            {
+                int end = nameOff;
+                while (end < bytes.Length && bytes[end] != 0) end++;
+                dllName = Encoding.ASCII.GetString(bytes, nameOff, end - nameOff);
+            }
+
+            // Walk the ILT (OriginalFirstThunk) to get names; the IAT (FirstThunk) gives us slot RVAs.
+            uint nameTableRva = originalFirstThunk != 0 ? originalFirstThunk : firstThunk;
+            if (nameTableRva != 0 && firstThunk != 0
+                && LanguageInspector.TryRvaToOffset(pe, (int)nameTableRva, out int iltOff))
+            {
+                int i = 0;
+                while (iltOff + thunkSize <= bytes.Length)
+                {
+                    ulong thunk = pe32Plus
+                        ? BitConverter.ToUInt64(bytes, iltOff)
+                        : BitConverter.ToUInt32(bytes, iltOff);
+                    if (thunk == 0) break;
+
+                    string funcName;
+                    if ((thunk & ordinalFlag) != 0)
+                    {
+                        ushort ord = (ushort)(thunk & 0xFFFF);
+                        funcName = $"#{ord}";
+                    }
+                    else
+                    {
+                        int hintNameRva = (int)(thunk & 0x7FFFFFFF);
+                        if (LanguageInspector.TryRvaToOffset(pe, hintNameRva, out int hnOff) && hnOff + 2 < bytes.Length)
+                        {
+                            int nameEnd = hnOff + 2;
+                            while (nameEnd < bytes.Length && bytes[nameEnd] != 0) nameEnd++;
+                            funcName = Encoding.ASCII.GetString(bytes, hnOff + 2, nameEnd - (hnOff + 2));
+                        }
+                        else funcName = "(unnamed)";
+                    }
+
+                    ulong slotVa = imageBase + (ulong)firstThunk + (ulong)(i * thunkSize);
+                    string norm = dllName;
+                    foreach (var ext in new[] { ".dll", ".DLL" })
+                        if (norm.EndsWith(ext)) { norm = norm[..^ext.Length]; break; }
+                    map[slotVa] = $"{norm}!{funcName}";
+
+                    iltOff += thunkSize;
+                    i++;
+                }
+            }
+            offset += 20;
+        }
+        return map;
+    }
 
     private static object DumpSection(JsonElement args)
     {
