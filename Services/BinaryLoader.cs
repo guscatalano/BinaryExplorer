@@ -24,6 +24,18 @@ public static class BinaryLoader
         new MarkOfTheWebInspector(),
         new EmbeddedFilesInspector(),
         new VirusTotalInspector(),
+        new MsiInspector(),
+    };
+
+    /// <summary>Inspectors that are happy to run against ANY file, not just PEs. PE-only inspectors are skipped when the file doesn't have an MZ header (e.g. an MSI/CFB) to avoid noisy 'invalid sections' errors.</summary>
+    private static readonly HashSet<string> NonPeSafeInspectors = new(StringComparer.Ordinal)
+    {
+        "Hashes",
+        "MOTW",
+        "Embedded",
+        "Strings",
+        "VirusTotal",
+        "MSI",
     };
 
     public static async Task LoadAsync(string path, CancellationToken ct = default)
@@ -32,7 +44,12 @@ public static class BinaryLoader
         AppState.Instance.ClearResults();
         AppState.Instance.Binary = context;
 
-        var tasks = DefaultInspectors.Select(i => RunOne(i, context, ct)).ToArray();
+        bool isPe = context.Bytes.Length >= 2 && context.Bytes[0] == 0x4D && context.Bytes[1] == 0x5A;
+        var inspectorsToRun = isPe
+            ? DefaultInspectors
+            : DefaultInspectors.Where(i => NonPeSafeInspectors.Contains(i.Name)).ToArray();
+
+        var tasks = inspectorsToRun.Select(i => RunOne(i, context, ct)).ToArray();
         await Task.WhenAll(tasks);
     }
 

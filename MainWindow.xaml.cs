@@ -141,6 +141,7 @@ public sealed partial class MainWindow : Window
                 "resources"    => typeof(ResourcesPage),
                 "packing"      => typeof(PackingPage),
                 "embedded"     => typeof(EmbeddedPage),
+                "msi"          => typeof(MsiPage),
                 "hex"          => typeof(HexPage),
                 "motw"         => typeof(MotwPage),
                 "virustotal"   => typeof(VirusTotalPage),

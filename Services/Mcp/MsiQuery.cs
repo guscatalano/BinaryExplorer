@@ -9,6 +9,85 @@ namespace BinaryExplorer.Services.Mcp;
 /// </summary>
 internal static class MsiQuery
 {
+    /// <summary>Cheap header check: Microsoft Compound File Binary magic.</summary>
+    public static bool IsCompoundFileBinary(byte[] bytes)
+    {
+        return bytes.Length >= 8
+            && bytes[0] == 0xD0 && bytes[1] == 0xCF && bytes[2] == 0x11 && bytes[3] == 0xE0
+            && bytes[4] == 0xA1 && bytes[5] == 0xB1 && bytes[6] == 0x1A && bytes[7] == 0xE1;
+    }
+
+    /// <summary>Open the MSI and pull the Property table as a dictionary. Returns null on error.</summary>
+    public static Dictionary<string, string?>? ReadProperties(string msiPath)
+    {
+        var installerType = Type.GetTypeFromProgID("WindowsInstaller.Installer");
+        if (installerType is null) return null;
+        object? installer = null, db = null, view = null;
+        var dict = new Dictionary<string, string?>();
+        try
+        {
+            installer = Activator.CreateInstance(installerType);
+            if (installer is null) return null;
+            db = Invoke(installer, "OpenDatabase", msiPath, 0);
+            if (db is null) return null;
+            view = Invoke(db, "OpenView", "SELECT `Property`, `Value` FROM `Property`");
+            if (view is null) return null;
+            Invoke(view, "Execute", null!);
+            while (true)
+            {
+                object? row = Invoke(view, "Fetch");
+                if (row is null) break;
+                try
+                {
+                    string key = Invoke(row, "get_StringData", 1)?.ToString() ?? "";
+                    string val = Invoke(row, "get_StringData", 2)?.ToString() ?? "";
+                    if (!string.IsNullOrEmpty(key)) dict[key] = val;
+                }
+                finally { ReleaseCom(row); }
+            }
+            return dict;
+        }
+        catch { return null; }
+        finally
+        {
+            try { if (view is not null) Invoke(view, "Close"); } catch { }
+            ReleaseCom(view); ReleaseCom(db); ReleaseCom(installer);
+        }
+    }
+
+    /// <summary>Count rows in an MSI table. Returns null if the table doesn't exist or can't be opened.</summary>
+    public static int? CountRows(string msiPath, string tableName)
+    {
+        var installerType = Type.GetTypeFromProgID("WindowsInstaller.Installer");
+        if (installerType is null) return null;
+        object? installer = null, db = null, view = null;
+        try
+        {
+            installer = Activator.CreateInstance(installerType);
+            if (installer is null) return null;
+            db = Invoke(installer, "OpenDatabase", msiPath, 0);
+            if (db is null) return null;
+            view = Invoke(db, "OpenView", $"SELECT * FROM `{tableName}`");
+            if (view is null) return null;
+            Invoke(view, "Execute", null!);
+            int n = 0;
+            while (true)
+            {
+                object? row = Invoke(view, "Fetch");
+                if (row is null) break;
+                n++;
+                ReleaseCom(row);
+            }
+            return n;
+        }
+        catch { return null; }
+        finally
+        {
+            try { if (view is not null) Invoke(view, "Close"); } catch { }
+            ReleaseCom(view); ReleaseCom(db); ReleaseCom(installer);
+        }
+    }
+
     /// <summary>Run "SELECT * FROM `tableName`" and return rows.</summary>
     public static object Query(string msiPath, string tableName)
     {

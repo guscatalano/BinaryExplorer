@@ -143,6 +143,44 @@ public sealed class InterfacesInspector : IBinaryInspector
                         rpcServer ? Severity.Warning : Severity.Info));
                 }
 
+                // --- 2a. RPC server interfaces (parse RPC_SERVER_INTERFACE structs) ---
+                var rpcInterfaces = FindRpcServerInterfaces(context.Bytes);
+                if (rpcInterfaces.Count > 0)
+                {
+                    findings.Add(new Finding(
+                        "RPC server interfaces exposed",
+                        rpcInterfaces.Count.ToString(),
+                        "Parsed from RPC_SERVER_INTERFACE structures in the binary (found via NDR20/NDR64 transfer-syntax UUID).",
+                        Severity.Warning));
+                    foreach (var iface in rpcInterfaces)
+                    {
+                        findings.Add(new Finding(
+                            $"  {iface.Uuid}",
+                            $"v{iface.MajorVersion}.{iface.MinorVersion}",
+                            $"File offset: 0x{iface.FileOffset:X8}\nTransfer syntax: {iface.TransferSyntax}\nStruct length: {iface.StructLength} bytes",
+                            Severity.Warning));
+                    }
+                }
+
+                // --- 2b. All named exports (not just COM ones) ---
+                if (exports.Count > 0)
+                {
+                    var nonComExports = exports.Where(e => !ComServerExports.Contains(e.Name)).ToList();
+                    int show = Math.Min(50, exports.Count);
+                    var detail = new StringBuilder();
+                    foreach (var e in exports.Take(show))
+                    {
+                        bool isCom = ComServerExports.Contains(e.Name);
+                        detail.Append($"  {(isCom ? "*" : " ")} {e.Name,-48}  RVA 0x{e.Rva:X8}\n");
+                    }
+                    if (exports.Count > show)
+                        detail.Append($"  ... and {exports.Count - show} more\n");
+                    findings.Add(new Finding(
+                        "All named exports",
+                        exports.Count.ToString(),
+                        detail.ToString().TrimEnd() + "\n\n* = COM in-process server entry point"));
+                }
+
                 // --- 3. Embedded GUIDs (potential CLSIDs / IIDs / interface UUIDs) ---
                 var guids = ScanGuidStrings(context.Bytes);
                 if (guids.Count > 0)
@@ -204,6 +242,75 @@ public sealed class InterfacesInspector : IBinaryInspector
                 };
             }
         }, ct);
+    }
+
+    public sealed record RpcServerInterface(string Uuid, ushort MajorVersion, ushort MinorVersion, int FileOffset, string TransferSyntax, int StructLength);
+
+    // RPC NDR transfer-syntax UUIDs as they appear in memory (mixed endianness).
+    // NDR20  = 8a885d04-1ceb-11c9-9fe8-08002b104860  → 04 5D 88 8A EB 1C C9 11 9F E8 08 00 2B 10 48 60
+    // NDR64  = 71710533-beba-4937-8319-b5dbef9ccc36  → 33 05 71 71 BA BE 37 49 83 19 B5 DB EF 9C CC 36
+    private static readonly byte[] Ndr20Bytes = new byte[]
+    {
+        0x04, 0x5D, 0x88, 0x8A, 0xEB, 0x1C, 0xC9, 0x11,
+        0x9F, 0xE8, 0x08, 0x00, 0x2B, 0x10, 0x48, 0x60,
+    };
+    private static readonly byte[] Ndr64Bytes = new byte[]
+    {
+        0x33, 0x05, 0x71, 0x71, 0xBA, 0xBE, 0x37, 0x49,
+        0x83, 0x19, 0xB5, 0xDB, 0xEF, 0x9C, 0xCC, 0x36,
+    };
+
+    /// <summary>
+    /// Scan the binary for RPC_SERVER_INTERFACE structs. The struct layout begins
+    ///   uint32 Length
+    ///   GUID   InterfaceId.SyntaxGUID
+    ///   uint16 InterfaceId.MajorVersion
+    ///   uint16 InterfaceId.MinorVersion
+    ///   GUID   TransferSyntax.SyntaxGUID   ← we scan for the NDR20/NDR64 UUID here
+    /// We anchor on the well-known transfer-syntax UUID, then walk back 24 bytes
+    /// to the struct start and read the InterfaceId.
+    /// </summary>
+    private static List<RpcServerInterface> FindRpcServerInterfaces(byte[] bytes)
+    {
+        var hits = new List<RpcServerInterface>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var span = (ReadOnlySpan<byte>)bytes;
+
+        foreach (var (needle, name) in new[] { (Ndr20Bytes, "NDR20"), (Ndr64Bytes, "NDR64") })
+        {
+            int from = 0;
+            while (from <= span.Length - needle.Length)
+            {
+                int idx = span.Slice(from).IndexOf((ReadOnlySpan<byte>)needle);
+                if (idx < 0) break;
+                int abs = from + idx;
+                from = abs + 1;
+
+                int structStart = abs - 24;
+                if (structStart < 0 || structStart + 44 > bytes.Length) continue;
+
+                int length = BitConverter.ToInt32(bytes, structStart);
+                // Sanity range: struct is 76..152 bytes for the realistic x86/x64 layouts.
+                if (length < 44 || length > 256) continue;
+                if (structStart + length > bytes.Length) continue;
+
+                var uuid = new Guid(bytes.AsSpan(structStart + 4, 16));
+                if (uuid == Guid.Empty) continue;
+                ushort major = BitConverter.ToUInt16(bytes, structStart + 20);
+                ushort minor = BitConverter.ToUInt16(bytes, structStart + 22);
+                // Reject implausibly high versions to filter false positives.
+                if (major > 100 || minor > 1000) continue;
+
+                string key = $"{uuid:N}_{major}.{minor}";
+                if (!seen.Add(key)) continue;
+                hits.Add(new RpcServerInterface(
+                    uuid.ToString("B").ToUpperInvariant(),
+                    major, minor, structStart, name, length));
+            }
+        }
+
+        hits.Sort((a, b) => string.CompareOrdinal(a.Uuid, b.Uuid));
+        return hits;
     }
 
     private static List<string> ScanGuidStrings(byte[] bytes)

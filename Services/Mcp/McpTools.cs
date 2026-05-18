@@ -168,6 +168,45 @@ internal static class McpTools
             description = "Open a Windows Installer .msi and return a structured summary: product info (ProductName, ProductCode, ProductVersion, Manufacturer, UpgradeCode), files dropped, registry writes, shortcuts created, custom actions, features. The single-call equivalent of 'inspect' for installers.",
             inputSchema = StringPathOnly("Filesystem path to an .msi database."),
         },
+        new
+        {
+            name = "dump_section",
+            description = "Write a PE section's raw bytes to a temp file. Useful for piping a section to an external tool or for further inspection.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    section = new { type = "string", description = "Section name (e.g. '.text', '.rsrc') or 0-based index." },
+                },
+                required = new[] { "path", "section" },
+            },
+        },
+        new
+        {
+            name = "extract_resource",
+            description = "Extract a single PE resource entry to a temp file. The matched resource is written verbatim (e.g. the embedded driver in procmon64.exe's RT_RCDATA can be extracted and then inspected with 'inspect').",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    resourceType = new
+                    {
+                        type = "string",
+                        description = "Win32 resource type name (e.g. 'RT_RCDATA', 'RT_BITMAP'), numeric id (e.g. '10'), or a custom string type (e.g. 'WEVT_TEMPLATE').",
+                    },
+                    resourceName = new
+                    {
+                        type = "string",
+                        description = "Optional. Resource name (string) or '#N' for a numeric id. When omitted, the first matching entry is written.",
+                    },
+                },
+                required = new[] { "path", "resourceType" },
+            },
+        },
     };
 
     public static async Task<McpJsonRpcResponse> CallAsync(object? id, string name, JsonElement args)
@@ -189,6 +228,8 @@ internal static class McpTools
                 "list_cab_files"       => await Task.Run(() => ListCabFiles(args)),
                 "query_msi_table"      => await Task.Run(() => QueryMsiTable(args)),
                 "summarize_msi"        => await Task.Run(() => SummarizeMsi(args)),
+                "dump_section"         => await Task.Run(() => DumpSection(args)),
+                "extract_resource"     => await Task.Run(() => ExtractResource(args)),
                 _ => null,
             };
             if (payload is null) return ErrorContent(id, $"Unknown tool: {name}");
@@ -733,6 +774,151 @@ internal static class McpTools
     }
 
     // ===================== query_msi_table / summarize_msi =====================
+
+    private static object DumpSection(JsonElement args)
+    {
+        string path = RequirePath(args);
+        string sectionArg = args.TryGetProperty("section", out var se) && se.ValueKind == JsonValueKind.String
+            ? se.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(sectionArg)) return new { error = "Missing 'section' argument." };
+
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var headers = pe.PEHeaders.SectionHeaders;
+
+        int targetIndex = -1;
+        if (int.TryParse(sectionArg, out var byIndex) && byIndex >= 0 && byIndex < headers.Length)
+        {
+            targetIndex = byIndex;
+        }
+        else
+        {
+            for (int i = 0; i < headers.Length; i++)
+            {
+                if (string.Equals(headers[i].Name, sectionArg, StringComparison.Ordinal)) { targetIndex = i; break; }
+            }
+        }
+        if (targetIndex < 0)
+        {
+            return new
+            {
+                error = $"Section '{sectionArg}' not found.",
+                available = headers.Select(h => h.Name).ToArray(),
+            };
+        }
+        var s = headers[targetIndex];
+        int off = s.PointerToRawData;
+        int size = s.SizeOfRawData;
+        if (off < 0 || size <= 0 || off + size > ctx.Bytes.Length)
+            return new { error = $"Section '{s.Name}' bytes are outside the file." };
+
+        var slice = new byte[size];
+        Array.Copy(ctx.Bytes, off, slice, 0, size);
+
+        string outDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BinaryExplorer");
+        System.IO.Directory.CreateDirectory(outDir);
+        string fileName = $"{System.IO.Path.GetFileNameWithoutExtension(path)}_{Sanitize(s.Name)}.bin";
+        string outPath = System.IO.Path.Combine(outDir, fileName);
+        System.IO.File.WriteAllBytes(outPath, slice);
+
+        var sha = System.Security.Cryptography.SHA256.HashData(slice);
+        return new
+        {
+            sectionName = s.Name,
+            sectionIndex = targetIndex,
+            fileOffset = "0x" + off.ToString("X"),
+            virtualAddress = "0x" + s.VirtualAddress.ToString("X"),
+            rawSize = size,
+            outputPath = outPath,
+            sha256 = Convert.ToHexString(sha).ToLowerInvariant(),
+        };
+    }
+
+    private static object ExtractResource(JsonElement args)
+    {
+        string path = RequirePath(args);
+        string typeArg = args.TryGetProperty("resourceType", out var tre) && tre.ValueKind == JsonValueKind.String
+            ? tre.GetString() ?? "" : "";
+        string? nameArg = args.TryGetProperty("resourceName", out var nre) && nre.ValueKind == JsonValueKind.String
+            ? nre.GetString() : null;
+        if (string.IsNullOrEmpty(typeArg)) return new { error = "Missing 'resourceType' argument." };
+
+        var bytes = System.IO.File.ReadAllBytes(path);
+        var entries = PeResources.Walk(bytes);
+        if (entries.Count == 0) return new { error = "No resource directory in this PE." };
+
+        bool TypeMatches(ResourceEntry e) =>
+            // Numeric id: "10"
+            (int.TryParse(typeArg, out var n) && e.TypeId == n) ||
+            // RT_RCDATA / RT_MANIFEST: TypeDisplay holds the canonical name
+            string.Equals(e.TypeDisplay, typeArg, StringComparison.OrdinalIgnoreCase) ||
+            // Custom string types: e.g. "WEVT_TEMPLATE"
+            string.Equals(e.TypeString, typeArg, StringComparison.OrdinalIgnoreCase);
+
+        bool NameMatches(ResourceEntry e)
+        {
+            if (nameArg is null) return true;
+            string trimmed = nameArg.TrimStart('#');
+            return string.Equals(e.NameDisplay, nameArg, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(e.NameDisplay.TrimStart('#'), trimmed, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(e.NameString, nameArg, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var matches = entries.Where(e => TypeMatches(e) && NameMatches(e)).ToList();
+        if (matches.Count == 0)
+        {
+            return new
+            {
+                error = $"No resource matched type='{typeArg}' name='{nameArg ?? "(any)"}'.",
+                availableTypes = entries.Select(e => e.TypeDisplay).Distinct().OrderBy(s => s).ToArray(),
+            };
+        }
+
+        var entry = matches[0];
+        if (entry.FileOffset < 0 || entry.Size <= 0 || entry.FileOffset + entry.Size > bytes.Length)
+            return new { error = "Resource bytes are outside the file." };
+
+        var slice = new byte[entry.Size];
+        Array.Copy(bytes, entry.FileOffset, slice, 0, entry.Size);
+
+        string detectedType = DetectInnerFormat(slice);
+        string outDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BinaryExplorer");
+        System.IO.Directory.CreateDirectory(outDir);
+        string fileName = $"{System.IO.Path.GetFileNameWithoutExtension(path)}_{Sanitize(entry.TypeDisplay)}_{Sanitize(entry.NameDisplay.TrimStart('#'))}.bin";
+        string outPath = System.IO.Path.Combine(outDir, fileName);
+        System.IO.File.WriteAllBytes(outPath, slice);
+
+        var sha = System.Security.Cryptography.SHA256.HashData(slice);
+        return new
+        {
+            outputPath = outPath,
+            sizeBytes = slice.Length,
+            detectedType,
+            sha256 = Convert.ToHexString(sha).ToLowerInvariant(),
+            resource = new
+            {
+                type = entry.TypeDisplay,
+                name = entry.NameDisplay,
+                language = "0x" + entry.Language.ToString("X4"),
+                fileOffset = "0x" + entry.FileOffset.ToString("X"),
+            },
+            candidatesConsidered = matches.Count,
+        };
+    }
+
+    private static string DetectInnerFormat(byte[] b)
+    {
+        if (b.Length >= 2 && b[0] == 0x4D && b[1] == 0x5A) return "PE/DOS (MZ header)";
+        if (b.Length >= 4 && b[0] == 0x4D && b[1] == 0x53 && b[2] == 0x43 && b[3] == 0x46) return "CAB";
+        if (b.Length >= 4 && b[0] == 0x50 && b[1] == 0x4B && b[2] == 0x03 && b[3] == 0x04) return "ZIP";
+        if (b.Length >= 8 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return "PNG";
+        if (b.Length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "JPEG";
+        if (b.Length >= 4 && b[0] == 0x25 && b[1] == 0x50 && b[2] == 0x44 && b[3] == 0x46) return "PDF";
+        if (b.Length >= 6 && b[0] == 0x37 && b[1] == 0x7A && b[2] == 0xBC && b[3] == 0xAF && b[4] == 0x27 && b[5] == 0x1C) return "7-Zip";
+        if (b.Length >= 5 && b[0] == 0x3C && b[1] == 0x3F && b[2] == 0x78 && b[3] == 0x6D && b[4] == 0x6C) return "XML";
+        return "binary";
+    }
 
     private static object QueryMsiTable(JsonElement args)
     {

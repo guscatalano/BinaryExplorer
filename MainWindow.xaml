@@ -134,6 +134,9 @@
                         <NavigationViewItem Content="Embedded Files" Tag="embedded">
                             <NavigationViewItem.Icon><FontIcon Glyph="&#xED41;" /></NavigationViewItem.Icon>
                         </NavigationViewItem>
+                        <NavigationViewItem Content="MSI" Tag="msi">
+                            <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B8;" /></NavigationViewItem.Icon>
+                        </NavigationViewItem>
                         <NavigationViewItem Content="Hex View" Tag="hex">
                             <NavigationViewItem.Icon><FontIcon Glyph="&#xE943;" /></NavigationViewItem.Icon>
                         </NavigationViewItem>

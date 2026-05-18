@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page x:Class="BinaryExplorer.Pages.MsiPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:BinaryExplorer.Controls">
+    <controls:InspectorResultView Title="MSI Installer" InspectorName="MSI" />
+</Page>
