@@ -9,15 +9,15 @@
   IgnorableNamespaces="uap rescap systemai">
 
   <Identity
-    Name="0C97C973-F9F4-4728-A725-CA19FF45E236"
-    Publisher="CN=AppPublisher"
+    Name="GusCatalano.BinaryExplorer"
+    Publisher="CN=119E0257-3B74-437C-A728-AC7C50256853"
     Version="1.0.1.0" />
 
   <mp:PhoneIdentity PhoneProductId="0C97C973-F9F4-4728-A725-CA19FF45E236" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
     <DisplayName>BinaryExplorer</DisplayName>
-    <PublisherDisplayName>AppPublisher</PublisherDisplayName>
+    <PublisherDisplayName>Gus Catalano</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 

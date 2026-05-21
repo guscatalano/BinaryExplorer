@@ -7,7 +7,8 @@
   and tested on a developer machine.
 
   - MSIX: built via the single-project MSIX tooling, signed with a self-signed
-    test certificate (CN=AppPublisher). The matching .cer is exported so the
+    test certificate whose subject matches the package Publisher. The matching
+    .cer is exported so the
     package can be trusted before install.
   - MSI:  built from an unpackaged, self-contained publish folder using WiX v5.
 
@@ -59,9 +60,9 @@ if (-not $SkipMsix) {
     $pfx = Join-Path $artifacts 'BinaryExplorer-test.pfx'
     $cer = Join-Path $artifacts "BinaryExplorer-$Platform.cer"
     $cert = Get-ChildItem 'Cert:\CurrentUser\My' |
-        Where-Object { $_.Subject -eq 'CN=AppPublisher' } | Select-Object -First 1
+        Where-Object { $_.Subject -eq 'CN=119E0257-3B74-437C-A728-AC7C50256853' } | Select-Object -First 1
     if (-not $cert) {
-        $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=AppPublisher' `
+        $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=119E0257-3B74-437C-A728-AC7C50256853' `
             -KeyUsage DigitalSignature -FriendlyName 'BinaryExplorer test' `
             -CertStoreLocation 'Cert:\CurrentUser\My' `
             -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
