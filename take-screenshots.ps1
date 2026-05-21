@@ -43,12 +43,19 @@ Remove-Item $request, $done -ErrorAction SilentlyContinue
 Get-Process BinaryExplorer -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 
-[pscustomobject]@{ outputDir = $OutputDir; sample = $Sample } |
-    ConvertTo-Json | Set-Content -Path $request -Encoding UTF8
+$req = [ordered]@{ outputDir = $OutputDir; sample = $Sample }
+
+# The MSI page needs a real installer database — pass our own built MSI if present.
+$msi = Get-ChildItem (Join-Path $PSScriptRoot 'artifacts') -Filter *.msi -ErrorAction SilentlyContinue |
+       Sort-Object Length -Descending | Select-Object -First 1
+if ($msi) { $req['msiSample'] = $msi.FullName }
+
+[pscustomobject]$req | ConvertTo-Json | Set-Content -Path $request -Encoding UTF8
 
 Write-Host "Launching BinaryExplorer in screenshot mode..." -ForegroundColor Cyan
 Write-Host "  output: $OutputDir"
 Write-Host "  sample: $Sample"
+if ($msi) { Write-Host "  msi:    $($msi.FullName)" }
 dotnet build (Join-Path $PSScriptRoot 'BinaryExplorer.csproj') -c Debug -p:Platform=x64 --nologo -v quiet
 dotnet run --project (Join-Path $PSScriptRoot 'BinaryExplorer.csproj') -p:Platform=x64 --no-build
 

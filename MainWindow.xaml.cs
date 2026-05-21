@@ -44,8 +44,8 @@ public sealed partial class MainWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".binexp-screenshots.json");
 
-    // Curated page set for README screenshots (nav Tag -> output file slug).
-    private static readonly (string Tag, string Slug)[] ScreenshotPages =
+    // Pages captured against the primary (native PE) sample, in nav order.
+    private static readonly (string Tag, string Slug)[] PrimaryPages =
     {
         ("overview",     "overview"),
         ("language",     "language"),
@@ -53,14 +53,40 @@ public sealed partial class MainWindow : Window
         ("signature",    "signature"),
         ("hashes",       "hashes"),
         ("richheader",   "rich-header"),
+        ("debug",        "debug-info"),
+        ("etw",          "etw"),
         ("dependencies", "dependencies"),
         ("capabilities", "capabilities"),
         ("interfaces",   "com-rpc"),
         ("strings",      "strings"),
+        ("tls",          "tls-callbacks"),
+        ("disassembly",  "disassembly"),
         ("pe",           "pe"),
         ("resources",    "resources"),
+        ("packing",      "packing"),
+        ("embedded",     "embedded-files"),
+        ("hex",          "hex-view"),
+        ("motw",         "mark-of-the-web"),
+        ("virustotal",   "virustotal"),
+        ("yara",         "yara"),
         ("tools",        "tools"),
     };
+
+    private static string? FindSampleMsi()
+    {
+        try
+        {
+            const string dir = @"C:\Windows\Installer";
+            if (Directory.Exists(dir))
+                return Directory.EnumerateFiles(dir, "*.msi")
+                    .Select(f => new FileInfo(f))
+                    .OrderByDescending(f => f.Length)
+                    .Select(f => f.FullName)
+                    .FirstOrDefault();
+        }
+        catch { /* ignore */ }
+        return null;
+    }
 
     private async Task RunScreenshotsAsync(string requestFile)
     {
@@ -68,60 +94,103 @@ public sealed partial class MainWindow : Window
         string doneFile = Path.ChangeExtension(requestFile, ".done");
         try
         {
+            string? sample, msiSample;
             using (var doc = JsonDocument.Parse(File.ReadAllText(requestFile)))
             {
                 outputDir = doc.RootElement.GetProperty("outputDir").GetString() ?? "";
-                string? sample = doc.RootElement.TryGetProperty("sample", out var s)
-                    ? s.GetString() : null;
-                File.Delete(requestFile);   // consume the request
-
-                Directory.CreateDirectory(outputDir);
-
-                // Fixed size + forced dark theme + solid background, so captures are
-                // consistent and the Mica backdrop doesn't bleed transparency into PNGs.
-                AppWindow.Resize(new SizeInt32(1400, 900));
-                if (Content is Grid root)
-                {
-                    root.RequestedTheme = ElementTheme.Dark;
-                    root.Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x20, 0x20, 0x20));
-                }
-                await Task.Delay(1000);
-
-                sample ??= @"C:\Windows\System32\notepad.exe";
-                if (File.Exists(sample))
-                    await BinaryLoader.LoadAsync(sample);
-                await Task.Delay(500);
-
-                // Expand every nav group so the sidebar reads as the full feature list.
-                foreach (var nvi in AllNavItems())
-                    if (nvi.MenuItems.Count > 0) nvi.IsExpanded = true;
-
-                int n = 1;
-                foreach (var (tag, slug) in ScreenshotPages)
-                {
-                    var item = NavLeaves().FirstOrDefault(x => (string?)x.Tag == tag);
-                    if (item is null) continue;
-                    NavView.SelectedItem = item;
-                    await Task.Delay(900);
-                    await CaptureAsync(Path.Combine(outputDir, $"{n:D2}-{slug}.png"));
-                    n++;
-                }
-
-                NavView.SelectedItem = NavView.SettingsItem;
-                await Task.Delay(900);
-                await CaptureAsync(Path.Combine(outputDir, $"{n:D2}-settings.png"));
-                n++;
-
-                // Scroll the Settings page down to the About card and capture it.
-                if (NavFrame.Content is Page settingsPage
-                    && settingsPage.Content is ScrollViewer sv)
-                {
-                    sv.UpdateLayout();
-                    sv.ChangeView(null, sv.ScrollableHeight, null, true);
-                    await Task.Delay(800);
-                    await CaptureAsync(Path.Combine(outputDir, $"{n:D2}-about.png"));
-                }
+                sample = doc.RootElement.TryGetProperty("sample", out var s) ? s.GetString() : null;
+                msiSample = doc.RootElement.TryGetProperty("msiSample", out var m) ? m.GetString() : null;
             }
+            File.Delete(requestFile);   // consume the request
+            Directory.CreateDirectory(outputDir);
+
+            // Fixed size + forced dark theme + solid background, so captures are
+            // consistent and the Mica backdrop doesn't bleed transparency into PNGs.
+            AppWindow.Resize(new SizeInt32(1400, 900));
+            if (Content is Grid root)
+            {
+                root.RequestedTheme = ElementTheme.Dark;
+                root.Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x20, 0x20, 0x20));
+            }
+            await Task.Delay(1000);
+
+            int n = 1;
+            async Task ShotAsync(string slug)
+            {
+                await Task.Delay(900);
+                await CaptureAsync(Path.Combine(outputDir, $"{n:D2}-{slug}.png"));
+                n++;
+            }
+            void Nav(string tag)
+            {
+                var item = NavLeaves().FirstOrDefault(x => (string?)x.Tag == tag);
+                if (item is not null) NavView.SelectedItem = item;
+            }
+
+            // Primary native sample — covers most pages.
+            sample ??= @"C:\Windows\System32\notepad.exe";
+            if (File.Exists(sample))
+                await BinaryLoader.LoadAsync(sample);
+            await Task.Delay(500);
+
+            // Expand every nav group so the sidebar reads as the full feature list.
+            foreach (var nvi in AllNavItems())
+                if (nvi.MenuItems.Count > 0) nvi.IsExpanded = true;
+
+            foreach (var (tag, slug) in PrimaryPages)
+            {
+                Nav(tag);
+                if (tag == "disassembly")
+                {
+                    await Task.Delay(1600);   // wait for function analysis
+                    if (NavFrame.Content is DisassemblyPage dp) await dp.ShowEntryAsync();
+                }
+                await ShotAsync(slug);
+            }
+
+            // Compare — needs a second file in the right-hand slot.
+            try
+            {
+                await CompareState.Instance.LoadAsync(@"C:\Windows\System32\kernel32.dll");
+                await Task.Delay(400);
+            }
+            catch { /* leave the compare page in its empty state */ }
+            Nav("compare");
+            await ShotAsync("compare");
+
+            // Decompile — needs a managed assembly; use the app's own .NET module.
+            string dotnetSample = Path.Combine(AppContext.BaseDirectory, "BinaryExplorer.dll");
+            if (File.Exists(dotnetSample))
+            {
+                await BinaryLoader.LoadAsync(dotnetSample);
+                await Task.Delay(500);
+            }
+            Nav("decompile");
+            await Task.Delay(1500);   // wait for the decompiler to load + build the type tree
+            if (NavFrame.Content is DecompilePage dcp) await dcp.ShowSampleAsync();
+            await ShotAsync("decompile");
+
+            // MSI — needs an installer database (the script passes our own built MSI).
+            msiSample ??= FindSampleMsi();
+            if (msiSample is not null && File.Exists(msiSample))
+            {
+                await BinaryLoader.LoadAsync(msiSample);
+                await Task.Delay(600);
+            }
+            Nav("msi");
+            await ShotAsync("msi");
+
+            // Settings + the About card (scrolled into view).
+            NavView.SelectedItem = NavView.SettingsItem;
+            await ShotAsync("settings");
+            if (NavFrame.Content is Page settingsPage
+                && settingsPage.Content is ScrollViewer sv)
+            {
+                sv.UpdateLayout();
+                sv.ChangeView(null, sv.ScrollableHeight, null, true);
+                await ShotAsync("about");
+            }
+
             File.WriteAllText(doneFile, "ok");
         }
         catch (Exception ex)

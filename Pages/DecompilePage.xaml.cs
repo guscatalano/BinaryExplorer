@@ -112,6 +112,40 @@ public sealed partial class DecompilePage : Page
         }
     }
 
+    /// <summary>
+    /// Screenshot helper: collapse the noisy compiler-generated &lt;global&gt; namespace,
+    /// expand a real one, and decompile a representative type into the code pane.
+    /// </summary>
+    public async Task ShowSampleAsync()
+    {
+        if (_decompiler is null || _allTypes is null) return;
+
+        TreeViewNode? realNs = null;
+        foreach (var ns in TypeTree.RootNodes)
+        {
+            if (ns.Content is not DecompileNode dn || dn.Kind != NodeKind.Namespace) continue;
+            if (dn.Label == "<global>") ns.IsExpanded = false;
+            else realNs ??= ns;
+        }
+        if (realNs is not null)
+        {
+            realNs.IsExpanded = true;
+            if (realNs.Children.Count > 0) realNs.Children[0].IsExpanded = true;
+        }
+
+        var picked = _allTypes
+            .Where(p => !string.IsNullOrEmpty(p.Type.Namespace))
+            .OrderBy(p => p.Type.FullName, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (picked.Type is null) return;
+        try
+        {
+            string code = await Task.Run(() => _decompiler.DecompileAsString(picked.Type.MetadataToken));
+            ShowCode(code);
+        }
+        catch { /* leave the status text in place */ }
+    }
+
     private void BuildTree(string filter)
     {
         TypeTree.RootNodes.Clear();

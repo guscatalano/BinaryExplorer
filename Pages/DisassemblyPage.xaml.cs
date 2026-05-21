@@ -129,6 +129,17 @@ public sealed partial class DisassemblyPage : Page
         }
     }
 
+    /// <summary>Screenshot helper: disassemble the entry-point function.</summary>
+    public async Task ShowEntryAsync()
+    {
+        var entry = _allFunctions.FirstOrDefault(f => f.Name == "entry")
+                    ?? _allFunctions.FirstOrDefault(f => f.Confirmed)
+                    ?? _allFunctions.FirstOrDefault();
+        if (entry is null) return;
+        OffsetInput.Text = "0x" + entry.Rva.ToString("X");
+        await NavigateAsync(entry.Rva, pushHistory: false);
+    }
+
     private void StartCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (StartCombo.SelectedItem is DisasmStart s)
