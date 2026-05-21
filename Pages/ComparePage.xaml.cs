@@ -60,6 +60,19 @@ public sealed partial class ComparePage : Page
             InspectorCombo.SelectedIndex = 0;
     }
 
+    /// <summary>
+    /// Screenshot helper: force the inspector combo to (re)raise a selection so the
+    /// comparison rows are built — guards against a WinUI race where SelectedIndex
+    /// set right after ItemsSource doesn't fire SelectionChanged.
+    /// </summary>
+    public void EnsureSelection()
+    {
+        if (InspectorCombo.Items.Count == 0) return;
+        int idx = InspectorCombo.SelectedIndex;
+        InspectorCombo.SelectedIndex = -1;
+        InspectorCombo.SelectedIndex = idx >= 0 ? idx : 0;
+    }
+
     private void InspectorCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (InspectorCombo.SelectedItem is not string name)

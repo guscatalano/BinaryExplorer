@@ -141,7 +141,9 @@ public sealed partial class MainWindow : Window
             async Task ShotAsync(string slug)
             {
                 await Task.Delay(900);
+                var restore = ScrubPii();
                 await CaptureAsync(Path.Combine(outputDir, $"{n:D2}-{slug}.png"));
+                foreach (var (tb, original) in restore) tb.Text = original;
                 n++;
             }
             void Nav(string tag)
@@ -179,6 +181,8 @@ public sealed partial class MainWindow : Window
             }
             catch { /* leave the compare page in its empty state */ }
             Nav("compare");
+            await Task.Delay(700);
+            if (NavFrame.Content is ComparePage cmp) cmp.EnsureSelection();
             await ShotAsync("compare");
 
             // Decompile — needs a managed assembly; use the app's own .NET module.
@@ -230,6 +234,56 @@ public sealed partial class MainWindow : Window
         {
             Close();
         }
+    }
+
+    /// <summary>
+    /// Replace the user-profile path (e.g. C:\Users\someone) with a generic mask in
+    /// every visible TextBox / TextBlock before a capture, so screenshots carry no
+    /// username. TextBox originals are returned so the caller can restore them after
+    /// the capture (avoids persisting the masked value via TextChanged handlers).
+    /// </summary>
+    private List<(TextBox Box, string Original)> ScrubPii()
+    {
+        var restore = new List<(TextBox, string)>();
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrEmpty(profile) || Content is not DependencyObject rootObj)
+            return restore;
+        const string mask = @"C:\Users\user";
+
+        foreach (var d in Descendants(rootObj))
+        {
+            if (d is TextBox tb && tb.Text is { Length: > 0 } t
+                && t.Contains(profile, StringComparison.OrdinalIgnoreCase))
+            {
+                restore.Add((tb, t));
+                tb.Text = ReplaceIgnoreCase(t, profile, mask);
+            }
+            else if (d is TextBlock blk && blk.Text is { Length: > 0 } bt
+                && bt.Contains(profile, StringComparison.OrdinalIgnoreCase))
+            {
+                blk.Text = ReplaceIgnoreCase(bt, profile, mask);
+            }
+        }
+        return restore;
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var d in Descendants(child)) yield return d;
+        }
+    }
+
+    private static string ReplaceIgnoreCase(string s, string oldValue, string newValue)
+    {
+        int idx;
+        while ((idx = s.IndexOf(oldValue, StringComparison.OrdinalIgnoreCase)) >= 0)
+            s = s.Remove(idx, oldValue.Length).Insert(idx, newValue);
+        return s;
     }
 
     private async Task CaptureAsync(string path)
