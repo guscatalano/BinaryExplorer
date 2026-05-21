@@ -9,7 +9,7 @@ A WinUI3 desktop app for inspecting Windows binaries (.exe / .dll / .sys / .winm
 Grab the latest build from the [Releases page](https://github.com/guscatalano/BinaryExplorer/releases) — x64 and ARM64:
 
 - **MSI** (`BinaryExplorer-<arch>.msi`) — self-contained installer; no .NET runtime required.
-- **MSIX** (`BinaryExplorer-<arch>-msix.zip`) — extract and run `Install.ps1`. The package is signed with a self-signed certificate; install the bundled `.cer` into *Trusted People* first.
+- **MSIX** (`BinaryExplorer-<arch>-msix.zip`) — extract the zip and run `Install.ps1`. The package is signed with a self-signed certificate, so the script installs that certificate (into Trusted People), the runtime dependencies, and the app — prompting for elevation when needed.
 
 ## Pages
 
