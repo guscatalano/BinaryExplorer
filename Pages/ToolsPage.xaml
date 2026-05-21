@@ -1,0 +1,315 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BinaryExplorer.Pages.ToolsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="24,16,24,24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Tools" />
+        <TextBlock Grid.Row="1"
+                   x:Name="HeadlineText"
+                   Style="{StaticResource SubtitleTextBlockStyle}"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Text="On-demand tools — same surface the MCP server exposes." />
+
+        <TabView Grid.Row="2"
+                 IsAddTabButtonVisible="False"
+                 CanReorderTabs="False"
+                 CanDragTabs="False"
+                 TabWidthMode="SizeToContent">
+            <TabView.TabItems>
+
+                <!-- ====== Resolve GUID ====== -->
+                <TabViewItem Header="GUID lookup" IsClosable="False">
+                    <Grid Padding="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Look up one or more GUIDs in HKLM/HKCU under SOFTWARE\Classes (and WOW6432Node). Identifies CLSID, Interface (IID), AppID, and TypeLib registrations. One GUID per line." />
+                        <StackPanel Grid.Row="1" Spacing="8" Orientation="Horizontal">
+                            <Button x:Name="GuidRunBtn" Click="GuidRunBtn_Click">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE756;" FontSize="14" />
+                                    <TextBlock Text="Resolve" />
+                                </StackPanel>
+                            </Button>
+                            <Button Click="GuidUseEmbeddedBtn_Click" ToolTipService.ToolTip="Pull every GUID found in the current binary by the COM/RPC inspector">
+                                <TextBlock Text="Use embedded GUIDs from current binary" />
+                            </Button>
+                        </StackPanel>
+                        <Grid Grid.Row="2" ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="320" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="GuidInput"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     FontFamily="Consolas"
+                                     PlaceholderText="{}{1f676c76-80e1-4239-95bb-83d0f6d0da78}&#x0a;{35138b9a-...}" />
+                            <ScrollViewer Grid.Column="1">
+                                <TextBlock x:Name="GuidResult"
+                                           FontFamily="Consolas"
+                                           FontSize="12"
+                                           IsTextSelectionEnabled="True"
+                                           TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           Text="Results will appear here." />
+                            </ScrollViewer>
+                        </Grid>
+                    </Grid>
+                </TabViewItem>
+
+                <!-- ====== Find xrefs ====== -->
+                <TabViewItem Header="Find xrefs" IsClosable="False">
+                    <Grid Padding="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Scan every executable section for instructions that reference a given VA or RVA. Detects branch targets, RIP-relative memory operands, absolute memory operands, and immediate values." />
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="XrefTarget" Width="200" FontFamily="Consolas" PlaceholderText="0x140012345 or 0x12345" />
+                            <NumberBox x:Name="XrefMax" Header="Max" Value="500" Minimum="1" Maximum="10000" SpinButtonPlacementMode="Compact" Width="120" />
+                            <Button x:Name="XrefRunBtn" Click="XrefRunBtn_Click" VerticalAlignment="Bottom">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE756;" FontSize="14" />
+                                    <TextBlock Text="Scan" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="2">
+                            <TextBlock x:Name="XrefResult"
+                                       FontFamily="Consolas"
+                                       FontSize="12"
+                                       IsTextSelectionEnabled="True"
+                                       TextWrapping="NoWrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Results will appear here." />
+                        </ScrollViewer>
+                    </Grid>
+                </TabViewItem>
+
+                <!-- ====== Search bytes ====== -->
+                <TabViewItem Header="Byte search" IsClosable="False">
+                    <Grid Padding="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Find a byte pattern anywhere in the file. Pattern: hex with optional spaces (4D 5A 90 00) or a quoted ASCII string (&quot;MZ&quot;)." />
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="SearchPattern" Width="320" FontFamily="Consolas" PlaceholderText="4D 5A 90 00  -or-  &quot;Microsoft&quot;" />
+                            <NumberBox x:Name="SearchMax" Header="Max hits" Value="1000" Minimum="1" Maximum="100000" SpinButtonPlacementMode="Compact" Width="140" />
+                            <Button x:Name="SearchRunBtn" Click="SearchRunBtn_Click" VerticalAlignment="Bottom">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE721;" FontSize="14" />
+                                    <TextBlock Text="Search" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="2">
+                            <TextBlock x:Name="SearchResult"
+                                       FontFamily="Consolas"
+                                       FontSize="12"
+                                       IsTextSelectionEnabled="True"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Results will appear here." />
+                        </ScrollViewer>
+                    </Grid>
+                </TabViewItem>
+
+                <!-- ====== Get string at ====== -->
+                <TabViewItem Header="String at offset" IsClosable="False">
+                    <Grid Padding="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Read a null-terminated string at a file offset. Auto-detects ASCII vs UTF-16LE based on the first byte pattern; you can override the encoding." />
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="StringOffset" Width="160" FontFamily="Consolas" PlaceholderText="0x..." Header="File offset" />
+                            <ComboBox x:Name="StringEncoding" Header="Encoding" SelectedIndex="0" Width="120">
+                                <ComboBoxItem Content="auto" />
+                                <ComboBoxItem Content="ascii" />
+                                <ComboBoxItem Content="utf-16le" />
+                            </ComboBox>
+                            <NumberBox x:Name="StringMax" Header="Max chars" Value="1024" Minimum="1" Maximum="8192" SpinButtonPlacementMode="Compact" Width="140" />
+                            <Button x:Name="StringRunBtn" Click="StringRunBtn_Click" VerticalAlignment="Bottom">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE756;" FontSize="14" />
+                                    <TextBlock Text="Read" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="2">
+                            <TextBlock x:Name="StringResult"
+                                       FontFamily="Consolas"
+                                       FontSize="12"
+                                       IsTextSelectionEnabled="True"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Result will appear here." />
+                        </ScrollViewer>
+                    </Grid>
+                </TabViewItem>
+
+                <!-- ====== String refs ====== -->
+                <TabViewItem Header="String references" IsClosable="False">
+                    <Grid Padding="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Locate ASCII/UTF-16LE occurrences of a string and, for each hit, list every place elsewhere in the file that references the hit's VA. Output is grouped per string occurrence." />
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="StringRefInput" Width="280" FontFamily="Consolas" PlaceholderText="Microsoft" Header="String" />
+                            <ComboBox x:Name="StringRefEncoding" Header="Encoding" SelectedIndex="0" Width="120">
+                                <ComboBoxItem Content="auto" />
+                                <ComboBoxItem Content="ascii" />
+                                <ComboBoxItem Content="utf-16le" />
+                            </ComboBox>
+                            <NumberBox x:Name="StringRefMaxHits" Header="Max hits" Value="1000" Minimum="1" Maximum="100000" SpinButtonPlacementMode="Compact" Width="120" />
+                            <NumberBox x:Name="StringRefMaxRefs" Header="Max refs/hit" Value="200" Minimum="0" Maximum="10000" SpinButtonPlacementMode="Compact" Width="140" />
+                            <CheckBox x:Name="StringRefResolve" Content="Resolve code refs" IsChecked="True" VerticalAlignment="Bottom" />
+                            <Button x:Name="StringRefRunBtn" Click="StringRefRunBtn_Click" VerticalAlignment="Bottom">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE721;" FontSize="14" />
+                                    <TextBlock Text="Find references" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="2">
+                            <TextBlock x:Name="StringRefResult"
+                                       FontFamily="Consolas"
+                                       FontSize="12"
+                                       IsTextSelectionEnabled="True"
+                                       TextWrapping="NoWrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Results will appear here." />
+                        </ScrollViewer>
+                    </Grid>
+                </TabViewItem>
+
+                <!-- ====== Dump section ====== -->
+                <TabViewItem Header="Dump section" IsClosable="False">
+                    <Grid Padding="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Write a PE section's raw bytes to a temp file. Useful for piping a section to an external tool or for further inspection." />
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="DumpSection" Width="160" FontFamily="Consolas" PlaceholderText=".text  -or-  0" Header="Section" />
+                            <Button x:Name="DumpRunBtn" Click="DumpRunBtn_Click" VerticalAlignment="Bottom">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE74E;" FontSize="14" />
+                                    <TextBlock Text="Dump" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="2">
+                            <TextBlock x:Name="DumpResult"
+                                       FontFamily="Consolas"
+                                       FontSize="12"
+                                       IsTextSelectionEnabled="True"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Result will appear here." />
+                        </ScrollViewer>
+                    </Grid>
+                </TabViewItem>
+
+                <!-- ====== Diagrams ====== -->
+                <TabViewItem Header="Diagrams" IsClosable="False">
+                    <Grid Padding="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Generate Mermaid source for high-level diagrams. Paste the output into any Mermaid renderer (or the chat window of an MCP client) to view." />
+                        <StackPanel Grid.Row="1" Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="PeMapBtn" Click="PeMapBtn_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <FontIcon Glyph="&#xE8A5;" FontSize="14" />
+                                        <TextBlock Text="PE map" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="CallGraphBtn" Click="CallGraphBtn_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <FontIcon Glyph="&#xF158;" FontSize="14" />
+                                        <TextBlock Text="Call graph" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="InitSeqBtn" Click="InitSeqBtn_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <FontIcon Glyph="&#xE945;" FontSize="14" />
+                                        <TextBlock Text="Init sequence" />
+                                    </StackPanel>
+                                </Button>
+                                <TextBox x:Name="DiagramRva" Width="180" FontFamily="Consolas" PlaceholderText="rva (for call/init)" />
+                                <NumberBox x:Name="DiagramDepth" Header="Depth" Value="2" Minimum="1" Maximum="8" SpinButtonPlacementMode="Compact" Width="120" />
+                                <Button x:Name="DiagramCopyBtn" Click="DiagramCopyBtn_Click" VerticalAlignment="Bottom">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+                                        <TextBlock Text="Copy Mermaid" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="16">
+                                <TextBlock Text="Call-graph knobs:" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                <CheckBox x:Name="CgResolveThunks" Content="Resolve thunks" IsChecked="True" />
+                                <CheckBox x:Name="CgIncludeTailCalls" Content="Tail calls" IsChecked="True" />
+                                <CheckBox x:Name="CgFollowCond" Content="Conditional branches" IsChecked="False" />
+                                <CheckBox x:Name="CgPruneImports" Content="Prune imports" IsChecked="False" />
+                            </StackPanel>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="2" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto">
+                            <TextBox x:Name="DiagramResult"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     FontFamily="Consolas"
+                                     FontSize="12"
+                                     TextWrapping="NoWrap"
+                                     PlaceholderText="Click PE map / Call graph / Init sequence to generate Mermaid source." />
+                        </ScrollViewer>
+                    </Grid>
+                </TabViewItem>
+
+            </TabView.TabItems>
+        </TabView>
+    </Grid>
+</Page>

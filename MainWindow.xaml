@@ -143,6 +143,10 @@
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
+                <NavigationViewItem Content="Tools" Tag="tools">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xEC7A;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+
                 <NavigationViewItem Content="Provenance" SelectsOnInvoked="False">
                     <NavigationViewItem.Icon><FontIcon Glyph="&#xE73E;" /></NavigationViewItem.Icon>
                     <NavigationViewItem.MenuItems>

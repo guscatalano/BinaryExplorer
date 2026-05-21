@@ -146,6 +146,7 @@ public sealed partial class MainWindow : Window
                 "motw"         => typeof(MotwPage),
                 "virustotal"   => typeof(VirusTotalPage),
                 "yara"         => typeof(YaraPage),
+                "tools"        => typeof(ToolsPage),
                 _ => null,
             };
             if (target is not null) NavFrame.Navigate(target);

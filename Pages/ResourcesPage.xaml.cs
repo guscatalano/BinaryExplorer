@@ -12,6 +12,7 @@ public sealed partial class ResourcesPage : Page
 {
     private List<ResourceEntry> _entries = new();
     private string? _loadedPath;
+    private ResourceEntry? _selected;
 
     public ResourcesPage()
     {
@@ -102,6 +103,8 @@ public sealed partial class ResourcesPage : Page
         var ctx = AppState.Instance.Binary;
         if (ctx is null) return;
 
+        _selected = entry;
+        ExtractBtn.IsEnabled = true;
         ResHeader.Text = $"{entry.TypeDisplay} / {entry.NameDisplay}";
         ResSubHeader.Text = $"lang 0x{entry.Language:X4}  ·  +0x{entry.FileOffset:X8}  ·  {EmbeddedHitFormat(entry.Size)}";
 
@@ -188,6 +191,102 @@ public sealed partial class ResourcesPage : Page
         if (bytes < 1024) return $"{bytes} B";
         if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
         return $"{bytes / (1024.0 * 1024):F1} MB";
+    }
+
+    private async void ExtractBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var entry = _selected;
+        var ctx = AppState.Instance.Binary;
+        if (entry is null || ctx is null) return;
+
+        ExtractBtn.IsEnabled = false;
+        try
+        {
+            string stem = System.IO.Path.GetFileNameWithoutExtension(ctx.Path);
+            string typeTag = SanitizeForFilename(entry.TypeDisplay);
+            string nameTag = SanitizeForFilename(entry.NameDisplay);
+            string ext = ResourceExtension(entry, ctx.Bytes);
+            string fileName = $"{stem}_{typeTag}_{nameTag}_lang{entry.Language:X4}{ext}";
+            string outDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BinaryExplorer");
+            System.IO.Directory.CreateDirectory(outDir);
+            string outPath = System.IO.Path.Combine(outDir, fileName);
+
+            await using (var fs = System.IO.File.Create(outPath))
+                await fs.WriteAsync(ctx.Bytes.AsMemory(entry.FileOffset, entry.Size));
+
+            var dlg = new ContentDialog
+            {
+                Title = "Resource extracted",
+                Content = new TextBlock { Text = outPath, IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") },
+                PrimaryButtonText = "Open folder",
+                CloseButtonText = "OK",
+                XamlRoot = XamlRoot,
+            };
+            var result = await dlg.ShowAsync();
+            if (result == ContentDialogResult.Primary)
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"/select,\"{outPath}\"",
+                    UseShellExecute = true,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            var dlg = new ContentDialog
+            {
+                Title = "Extraction failed",
+                Content = ex.Message,
+                CloseButtonText = "OK",
+                XamlRoot = XamlRoot,
+            };
+            await dlg.ShowAsync();
+        }
+        finally
+        {
+            ExtractBtn.IsEnabled = _selected is not null;
+        }
+    }
+
+    private static string SanitizeForFilename(string s)
+    {
+        var invalid = System.IO.Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s)
+            sb.Append(Array.IndexOf(invalid, c) >= 0 || c == ' ' || c == '/' || c == '\\' ? '_' : c);
+        return sb.ToString();
+    }
+
+    private static string ResourceExtension(ResourceEntry entry, byte[] full)
+    {
+        // Best-effort: pick extension from resource type, else sniff first bytes.
+        switch (entry.TypeId)
+        {
+            case 1:  return ".cur";    // RT_CURSOR
+            case 2:  return ".bmp";    // RT_BITMAP
+            case 3:  return ".ico";    // RT_ICON
+            case 6:  return ".strtab"; // RT_STRING
+            case 12: return ".grpcur";
+            case 14: return ".grpico";
+            case 16: return ".vsi";    // RT_VERSION
+            case 23: return ".html";
+            case 24: return ".manifest";
+        }
+        if (entry.Size >= 4 && entry.FileOffset + 4 <= full.Length)
+        {
+            byte b0 = full[entry.FileOffset], b1 = full[entry.FileOffset + 1],
+                 b2 = full[entry.FileOffset + 2], b3 = full[entry.FileOffset + 3];
+            if (b0 == 0x4D && b1 == 0x5A) return ".bin"; // PE — keep as .bin so it's not auto-launched
+            if (b0 == 0x50 && b1 == 0x4B && b2 == 0x03 && b3 == 0x04) return ".zip";
+            if (b0 == 0x89 && b1 == 0x50 && b2 == 0x4E && b3 == 0x47) return ".png";
+            if (b0 == 0xFF && b1 == 0xD8 && b2 == 0xFF) return ".jpg";
+            if (b0 == 0x47 && b1 == 0x49 && b2 == 0x46) return ".gif";
+            if (b0 == 0x1F && b1 == 0x8B) return ".gz";
+            if (b0 == 0x4D && b1 == 0x53 && b2 == 0x43 && b3 == 0x46) return ".cab";
+        }
+        return ".bin";
     }
 
     private enum NodeKind { Type, Name, Leaf }

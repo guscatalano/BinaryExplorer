@@ -42,14 +42,25 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <StackPanel Orientation="Horizontal" Spacing="12" Padding="12,10,12,4">
-                        <TextBlock x:Name="ResHeader" Style="{StaticResource BodyStrongTextBlockStyle}" Text="Pick a resource on the left" />
-                        <TextBlock x:Name="ResSubHeader"
+                    <Grid Padding="12,10,12,4" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" x:Name="ResHeader" Style="{StaticResource BodyStrongTextBlockStyle}" Text="Pick a resource on the left" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" x:Name="ResSubHeader"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    FontFamily="Consolas"
                                    FontSize="12"
                                    VerticalAlignment="Center" />
-                    </StackPanel>
+                        <Button Grid.Column="2" x:Name="ExtractBtn" Click="ExtractBtn_Click" IsEnabled="False">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE74E;" FontSize="14" />
+                                <TextBlock Text="Extract" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
 
                     <Grid Grid.Row="1">
                         <controls:HexView x:Name="HexPane" />

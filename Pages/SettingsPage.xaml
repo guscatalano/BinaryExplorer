@@ -129,6 +129,28 @@
                     <ToggleSwitch x:Name="EmbDataToggle"      Header="Data (SQLite, PEM)"                                          Toggled="EmbCategory_Toggled" Tag="Data" />
                 </StackPanel>
             </Border>
+
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="About" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock Text="BinaryExplorer" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Inspect Windows binaries (.exe / .dll / .sys / .winmd / .msi) without running them." />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Made by Gus Catalano" />
+                    <StackPanel Orientation="Horizontal" Spacing="4" Margin="-12,0,0,0">
+                        <HyperlinkButton Content="Source on GitHub"
+                                         NavigateUri="https://github.com/guscatalano/BinaryExplorer" />
+                        <HyperlinkButton Content="guscatalano.dev"
+                                         NavigateUri="https://guscatalano.dev/" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </Page>
