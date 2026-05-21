@@ -75,6 +75,7 @@ jobs:
           dotnet build BinaryExplorer.csproj
           -c Release
           -p:Platform=${{ matrix.platform }}
+          -r ${{ matrix.rid }}
           -p:GenerateAppxPackageOnBuild=true
           -p:AppxPackageDir=${{ github.workspace }}\artifacts\msix\
           -p:UapAppxPackageBuildMode=SideloadOnly

@@ -13,7 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ x64, ARM64 ]
+        include:
+          - platform: x64
+            rid: win-x64
+          - platform: ARM64
+            rid: win-arm64
 
     steps:
       - name: Checkout
@@ -24,8 +28,8 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Restore
-        run: dotnet restore BinaryExplorer.csproj -p:Platform=${{ matrix.platform }}
-
+      # A single restore+build step with an explicit RID: the csproj infers the
+      # RuntimeIdentifier from the build host's process architecture, which
+      # conflicts with Platform=ARM64 on an x64 runner. Passing -r overrides it.
       - name: Build
-        run: dotnet build BinaryExplorer.csproj --no-restore -c Release -p:Platform=${{ matrix.platform }}
+        run: dotnet build BinaryExplorer.csproj -c Release -p:Platform=${{ matrix.platform }} -r ${{ matrix.rid }}
