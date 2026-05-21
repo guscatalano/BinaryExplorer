@@ -220,11 +220,12 @@ or contacts.
    app. The self-signed signing-cert subject in `build-packages.ps1` and
    `release.yml` was also updated to the new Publisher so sideload MSIX builds
    keep working.
-3. **Remove the unused `systemAIModels` capability** from `Package.appxmanifest`
-   unless the app actually uses Windows system AI models — declaring an unused
-   restricted capability adds review friction. `runFullTrust` must stay; it is
-   required for a full-trust Win32 desktop app and is expected for this app type.
-4. **Privacy policy** — host the text above and enter the URL.
+3. ~~Remove the unused `systemAIModels` capability.~~ **Done** — the manifest now
+   declares only `runFullTrust` (required for a full-trust Win32 desktop app).
+4. **Privacy policy** — the app shows its network-call disclosure in-app at
+   Settings → Privacy. Partner Center still has a *Privacy policy URL* field;
+   host the policy text above (or link a page in the GitHub repo) and enter that
+   URL.
 5. **Build the MSIX** with the Store identity (`build-packages.ps1` or the
    release workflow produces the package; the Store re-signs it, so the
    self-signed certificate is not used for Store distribution).

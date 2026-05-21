@@ -152,6 +152,28 @@
                     </StackPanel>
                 </StackPanel>
             </Border>
+
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Privacy" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="BinaryExplorer runs entirely on your device — no accounts, no analytics, no telemetry. The files you inspect are never uploaded. It connects to the internet only for these optional features:" />
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="•  VirusTotal — when you add an API key and use the VirusTotal page, the file's SHA-256 hash (not its contents) is sent to virustotal.com." />
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="•  YARA — the first use of the YARA page may download yara.exe from its official GitHub releases." />
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="•  MCP server — the optional built-in server listens on localhost only and is off by default." />
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </Page>
