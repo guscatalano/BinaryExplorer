@@ -31,6 +31,14 @@ public sealed partial class MainWindow : Window
 
         NavFrame.Navigate(typeof(OverviewPage));
 
+        // Reflect the loaded binary's name in the title bar.
+        AppState.Instance.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is null or "Binary" or "IsLoaded" or "DisplayName")
+                DispatcherQueue.TryEnqueue(UpdateTitleBar);
+        };
+        UpdateTitleBar();
+
         // Screenshot mode: if a request file exists in the user profile, the app
         // loads a sample binary, walks the curated pages capturing each to a PNG,
         // writes a .done file, then exits. A file marker (not an env var / CLI
@@ -43,6 +51,21 @@ public sealed partial class MainWindow : Window
     private static string ScreenshotRequestPath() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".binexp-screenshots.json");
+
+    private void UpdateTitleBar()
+    {
+        if (AppState.Instance.IsLoaded)
+        {
+            string name = AppState.Instance.DisplayName;
+            AppTitleBar.Subtitle = name;
+            Title = $"BinaryExplorer — {name}";
+        }
+        else
+        {
+            AppTitleBar.Subtitle = "";
+            Title = "BinaryExplorer";
+        }
+    }
 
     // Pages captured against the primary (native PE) sample, in nav order.
     private static readonly (string Tag, string Slug)[] PrimaryPages =
