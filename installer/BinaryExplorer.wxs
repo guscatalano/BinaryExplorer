@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WiX v5 installer for BinaryExplorer.
+
+  Builds an MSI from an unpackaged (WindowsPackageType=None), self-contained
+  publish folder. Required preprocessor variables, passed via `wix build -d`:
+    PublishDir  - path to the dotnet publish output folder
+    Version     - 4-part product version, e.g. 1.2.3.0
+
+  Example:
+    wix build installer\BinaryExplorer.wxs `
+      -d PublishDir=artifacts\publish-x64 `
+      -d Version=1.0.0.0 `
+      -arch x64 `
+      -o artifacts\BinaryExplorer-x64.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <?ifndef Version ?>
+  <?define Version = "1.0.0.0" ?>
+  <?endif?>
+
+  <?ifndef PublishDir ?>
+  <?error PublishDir must be defined: -d PublishDir=<path to publish output> ?>
+  <?endif?>
+
+  <Package
+    Name="BinaryExplorer"
+    Manufacturer="Gus Catalano"
+    Version="$(Version)"
+    UpgradeCode="7C3A9E51-2D84-4F6B-B1E0-9A5C8D3F2107"
+    Scope="perMachine"
+    Compressed="yes">
+
+    <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
+      DowngradeErrorMessage="A newer version of BinaryExplorer is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(sys.SOURCEFILEDIR)..\Assets\AppIcon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/guscatalano/BinaryExplorer" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/guscatalano/BinaryExplorer" />
+
+    <Feature Id="Main" Title="BinaryExplorer" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="BinaryExplorer" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppShortcutFolder" Name="BinaryExplorer" />
+    </StandardDirectory>
+  </Fragment>
+
+  <!-- Harvest the entire publish folder, preserving its subdirectory layout. -->
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(PublishDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="StartMenuShortcut" Directory="AppShortcutFolder" Guid="*">
+      <Shortcut Id="BinaryExplorerShortcut"
+                Name="BinaryExplorer"
+                Description="Inspect Windows binaries without running them"
+                Target="[INSTALLFOLDER]BinaryExplorer.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AppIcon.ico" />
+      <RemoveFolder Id="RemoveAppShortcutFolder" Directory="AppShortcutFolder" On="uninstall" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\BinaryExplorer"
+                     Name="installed"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+</Wix>

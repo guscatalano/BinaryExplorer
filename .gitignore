@@ -48,6 +48,7 @@ _ReSharper*/
 *.DotSettings.user
 *.dotCover
 .idea/
+.claude/
 
 # Generated files
 Generated\ Files/
