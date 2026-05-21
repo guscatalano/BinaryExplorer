@@ -1,154 +1,138 @@
-using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace BinaryExplorer.Services.Mcp;
 
 /// <summary>
-/// Lightweight Windows Installer (MSI) reader using the
-/// WindowsInstaller.Installer COM type. No third-party deps.
-/// Read-only.
+/// Read-only Windows Installer (MSI) database reader.
+///
+/// Uses the native msi.dll database API via P/Invoke rather than the
+/// WindowsInstaller.Installer COM automation object — the COM object cannot be
+/// activated from a packaged app, which silently broke MSI inspection. The
+/// native exports are plain functions and work in packaged and unpackaged
+/// processes alike.
 /// </summary>
 internal static class MsiQuery
 {
     /// <summary>Cheap header check: Microsoft Compound File Binary magic.</summary>
-    public static bool IsCompoundFileBinary(byte[] bytes)
-    {
-        return bytes.Length >= 8
-            && bytes[0] == 0xD0 && bytes[1] == 0xCF && bytes[2] == 0x11 && bytes[3] == 0xE0
-            && bytes[4] == 0xA1 && bytes[5] == 0xB1 && bytes[6] == 0x1A && bytes[7] == 0xE1;
-    }
+    public static bool IsCompoundFileBinary(byte[] bytes) =>
+        bytes.Length >= 8
+        && bytes[0] == 0xD0 && bytes[1] == 0xCF && bytes[2] == 0x11 && bytes[3] == 0xE0
+        && bytes[4] == 0xA1 && bytes[5] == 0xB1 && bytes[6] == 0x1A && bytes[7] == 0xE1;
 
-    /// <summary>Open the MSI and pull the Property table as a dictionary. Returns null on error.</summary>
+    // ===================== native msi.dll =====================
+    // MSIHANDLE is a 32-bit handle on all architectures.
+
+    [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern uint MsiOpenDatabaseW(string szDatabasePath, IntPtr szPersist, out uint phDatabase);
+
+    [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern uint MsiDatabaseOpenViewW(uint hDatabase, string szQuery, out uint phView);
+
+    [DllImport("msi.dll", ExactSpelling = true)]
+    private static extern uint MsiViewExecute(uint hView, uint hRecord);
+
+    [DllImport("msi.dll", ExactSpelling = true)]
+    private static extern uint MsiViewFetch(uint hView, out uint phRecord);
+
+    [DllImport("msi.dll", ExactSpelling = true)]
+    private static extern uint MsiViewGetColumnInfo(uint hView, uint eColumnInfo, out uint phRecord);
+
+    [DllImport("msi.dll", ExactSpelling = true)]
+    private static extern uint MsiRecordGetFieldCount(uint hRecord);
+
+    [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern uint MsiRecordGetStringW(uint hRecord, uint iField, StringBuilder szValueBuf, ref uint pcchValueBuf);
+
+    [DllImport("msi.dll", ExactSpelling = true)]
+    private static extern uint MsiCloseHandle(uint hAny);
+
+    private const uint ERROR_SUCCESS = 0;
+    private const uint ERROR_MORE_DATA = 234;
+    private const uint MSICOLINFO_NAMES = 0;
+    // MSIDBOPEN_READONLY is (LPCWSTR)0, i.e. a null persist pointer.
+
+    // ===================== public API =====================
+
+    /// <summary>Open the MSI and pull the whole Property table as a dictionary. Null on error.</summary>
     public static Dictionary<string, string?>? ReadProperties(string msiPath)
     {
-        var installerType = Type.GetTypeFromProgID("WindowsInstaller.Installer");
-        if (installerType is null) return null;
-        object? installer = null, db = null, view = null;
-        var dict = new Dictionary<string, string?>();
-        try
-        {
-            installer = Activator.CreateInstance(installerType);
-            if (installer is null) return null;
-            db = Invoke(installer, "OpenDatabase", msiPath, 0);
-            if (db is null) return null;
-            view = Invoke(db, "OpenView", "SELECT `Property`, `Value` FROM `Property`");
-            if (view is null) return null;
-            Invoke(view, "Execute", null!);
-            while (true)
-            {
-                object? row = Invoke(view, "Fetch");
-                if (row is null) break;
-                try
-                {
-                    string key = Invoke(row, "get_StringData", 1)?.ToString() ?? "";
-                    string val = Invoke(row, "get_StringData", 2)?.ToString() ?? "";
-                    if (!string.IsNullOrEmpty(key)) dict[key] = val;
-                }
-                finally { ReleaseCom(row); }
-            }
-            return dict;
-        }
-        catch { return null; }
-        finally
-        {
-            try { if (view is not null) Invoke(view, "Close"); } catch { }
-            ReleaseCom(view); ReleaseCom(db); ReleaseCom(installer);
-        }
+        if (MsiOpenDatabaseW(msiPath, IntPtr.Zero, out uint hDb) != ERROR_SUCCESS)
+            return null;
+        try { return ReadPropertyTable(hDb); }
+        finally { MsiCloseHandle(hDb); }
     }
 
-    /// <summary>Count rows in an MSI table. Returns null if the table doesn't exist or can't be opened.</summary>
+    /// <summary>Count rows in a table. Null if the table doesn't exist or can't be opened.</summary>
     public static int? CountRows(string msiPath, string tableName)
     {
-        var installerType = Type.GetTypeFromProgID("WindowsInstaller.Installer");
-        if (installerType is null) return null;
-        object? installer = null, db = null, view = null;
+        if (MsiOpenDatabaseW(msiPath, IntPtr.Zero, out uint hDb) != ERROR_SUCCESS)
+            return null;
         try
         {
-            installer = Activator.CreateInstance(installerType);
-            if (installer is null) return null;
-            db = Invoke(installer, "OpenDatabase", msiPath, 0);
-            if (db is null) return null;
-            view = Invoke(db, "OpenView", $"SELECT * FROM `{tableName}`");
-            if (view is null) return null;
-            Invoke(view, "Execute", null!);
-            int n = 0;
-            while (true)
+            if (MsiDatabaseOpenViewW(hDb, $"SELECT * FROM `{tableName}`", out uint hView) != ERROR_SUCCESS)
+                return null;
+            try
             {
-                object? row = Invoke(view, "Fetch");
-                if (row is null) break;
-                n++;
-                ReleaseCom(row);
+                if (MsiViewExecute(hView, 0) != ERROR_SUCCESS) return null;
+                int n = 0;
+                while (MsiViewFetch(hView, out uint hRec) == ERROR_SUCCESS)
+                {
+                    MsiCloseHandle(hRec);
+                    n++;
+                }
+                return n;
             }
-            return n;
+            finally { MsiCloseHandle(hView); }
         }
-        catch { return null; }
-        finally
-        {
-            try { if (view is not null) Invoke(view, "Close"); } catch { }
-            ReleaseCom(view); ReleaseCom(db); ReleaseCom(installer);
-        }
+        finally { MsiCloseHandle(hDb); }
     }
 
-    /// <summary>Run "SELECT * FROM `tableName`" and return rows.</summary>
+    /// <summary>Run "SELECT * FROM `tableName`" and return its rows.</summary>
     public static object Query(string msiPath, string tableName)
     {
-        var installerType = Type.GetTypeFromProgID("WindowsInstaller.Installer");
-        if (installerType is null)
-            return new { error = "WindowsInstaller.Installer COM type not registered. (Available on every Windows install.)" };
-
-        object? installer = null;
-        object? db = null;
+        if (MsiOpenDatabaseW(msiPath, IntPtr.Zero, out uint hDb) != ERROR_SUCCESS)
+            return new { error = $"Couldn't open MSI database: {msiPath}" };
         try
         {
-            installer = Activator.CreateInstance(installerType)!;
-            db = Invoke(installer, "OpenDatabase", msiPath, 0); // 0 = msiOpenDatabaseModeReadOnly
-            if (db is null) return new { error = "OpenDatabase returned null." };
-            return RunSelect(db, $"SELECT * FROM `{tableName}`");
+            return RunSelect(hDb, $"SELECT * FROM `{tableName}`")
+                ?? new { error = $"Table '{tableName}' not found or not readable." };
         }
-        catch (TargetInvocationException tie) when (tie.InnerException is not null)
-        {
-            return new { error = "MSI error: " + tie.InnerException.Message };
-        }
-        catch (Exception ex)
-        {
-            return new { error = ex.GetType().Name + ": " + ex.Message };
-        }
-        finally
-        {
-            ReleaseCom(db);
-            ReleaseCom(installer);
-        }
+        finally { MsiCloseHandle(hDb); }
     }
 
-    /// <summary>Run several interesting queries and return a structured summary.</summary>
+    /// <summary>Run several queries and return a structured summary.</summary>
     public static object Summarize(string msiPath)
     {
-        var installerType = Type.GetTypeFromProgID("WindowsInstaller.Installer");
-        if (installerType is null)
-            return new { error = "WindowsInstaller.Installer COM type not registered." };
-
-        object? installer = null;
-        object? db = null;
+        if (MsiOpenDatabaseW(msiPath, IntPtr.Zero, out uint hDb) != ERROR_SUCCESS)
+            return new { error = $"Couldn't open MSI database: {msiPath}" };
         try
         {
-            installer = Activator.CreateInstance(installerType)!;
-            db = Invoke(installer, "OpenDatabase", msiPath, 0);
-            if (db is null) return new { error = "OpenDatabase returned null." };
+            var all = ReadPropertyTable(hDb) ?? new Dictionary<string, string?>();
+            var keys = new[]
+            {
+                "ProductName", "ProductCode", "ProductVersion", "ProductLanguage",
+                "Manufacturer", "UpgradeCode",
+                "ARPCONTACT", "ARPURLINFOABOUT", "ARPHELPLINK",
+                "ALLUSERS", "MSIINSTALLPERUSER",
+            };
+            var productInfo = new Dictionary<string, string?>();
+            foreach (var k in keys) productInfo[k] = all.TryGetValue(k, out var v) ? v : null;
 
-            var properties = TryProperties(db);
-            var files = TryRun(db, "SELECT * FROM `File`");
-            var registry = TryRun(db, "SELECT * FROM `Registry`");
-            var shortcuts = TryRun(db, "SELECT * FROM `Shortcut`");
-            var features = TryRun(db, "SELECT * FROM `Feature`");
-            var customActions = TryRun(db, "SELECT * FROM `CustomAction`");
-            var launchConditions = TryRun(db, "SELECT * FROM `LaunchCondition`");
-            var components = TryRun(db, "SELECT * FROM `Component`");
-            var directory = TryRun(db, "SELECT * FROM `Directory`");
-            var tables = TryRun(db, "SELECT `Name` FROM `_Tables`");
+            var files            = RunSelect(hDb, "SELECT * FROM `File`");
+            var registry         = RunSelect(hDb, "SELECT * FROM `Registry`");
+            var shortcuts        = RunSelect(hDb, "SELECT * FROM `Shortcut`");
+            var features         = RunSelect(hDb, "SELECT * FROM `Feature`");
+            var customActions    = RunSelect(hDb, "SELECT * FROM `CustomAction`");
+            var launchConditions = RunSelect(hDb, "SELECT * FROM `LaunchCondition`");
+            var components       = RunSelect(hDb, "SELECT * FROM `Component`");
+            var directory        = RunSelect(hDb, "SELECT * FROM `Directory`");
+            var tables           = RunSelect(hDb, "SELECT `Name` FROM `_Tables`");
 
             return new
             {
                 path = msiPath,
-                productInfo = properties,
+                productInfo,
                 tablesAvailable = (tables as dynamic)?.rows,
                 fileCount = (files as dynamic)?.rowCount,
                 registryCount = (registry as dynamic)?.rowCount,
@@ -156,120 +140,78 @@ internal static class MsiQuery
                 featureCount = (features as dynamic)?.rowCount,
                 customActionCount = (customActions as dynamic)?.rowCount,
                 componentCount = (components as dynamic)?.rowCount,
-                files = files,
-                registry = registry,
-                shortcuts = shortcuts,
-                features = features,
-                customActions = customActions,
-                launchConditions = launchConditions,
-                components = components,
-                directory = directory,
+                files,
+                registry,
+                shortcuts,
+                features,
+                customActions,
+                launchConditions,
+                components,
+                directory,
             };
         }
-        catch (TargetInvocationException tie) when (tie.InnerException is not null)
-        {
-            return new { error = "MSI error: " + tie.InnerException.Message };
-        }
-        catch (Exception ex)
-        {
-            return new { error = ex.GetType().Name + ": " + ex.Message };
-        }
-        finally
-        {
-            ReleaseCom(db);
-            ReleaseCom(installer);
-        }
+        finally { MsiCloseHandle(hDb); }
     }
 
-    private static object? TryRun(object db, string sql)
-    {
-        try { return RunSelect(db, sql); }
-        catch { return null; }
-    }
+    // ===================== internals =====================
 
-    private static Dictionary<string, string?> TryProperties(object db)
+    private static Dictionary<string, string?>? ReadPropertyTable(uint hDb)
     {
-        var props = new Dictionary<string, string?>();
-        var keys = new[]
-        {
-            "ProductName", "ProductCode", "ProductVersion", "ProductLanguage",
-            "Manufacturer", "UpgradeCode",
-            "ARPCONTACT", "ARPURLINFOABOUT", "ARPHELPLINK",
-            "ALLUSERS", "MSIINSTALLPERUSER",
-        };
+        if (MsiDatabaseOpenViewW(hDb, "SELECT `Property`, `Value` FROM `Property`", out uint hView) != ERROR_SUCCESS)
+            return null;
         try
         {
-            object? view = Invoke(db, "OpenView", "SELECT `Value` FROM `Property` WHERE `Property` = ?");
-            if (view is null) return props;
-            try
+            if (MsiViewExecute(hView, 0) != ERROR_SUCCESS) return null;
+            var dict = new Dictionary<string, string?>();
+            while (MsiViewFetch(hView, out uint hRec) == ERROR_SUCCESS)
             {
-                foreach (var key in keys)
+                try
                 {
-                    try
-                    {
-                        var rec = MakeRecord(1);
-                        Invoke(rec, "set_StringData", 1, key);
-                        Invoke(view, "Execute", rec);
-                        var row = Invoke(view, "Fetch");
-                        if (row is null) { props[key] = null; ReleaseCom(rec); continue; }
-                        string val = Invoke(row, "get_StringData", 1)?.ToString() ?? "";
-                        props[key] = val;
-                        ReleaseCom(row);
-                        ReleaseCom(rec);
-                    }
-                    catch { props[key] = null; }
+                    string key = RecordString(hRec, 1);
+                    if (!string.IsNullOrEmpty(key)) dict[key] = RecordString(hRec, 2);
                 }
+                finally { MsiCloseHandle(hRec); }
             }
-            finally
-            {
-                try { Invoke(view, "Close"); } catch { }
-                ReleaseCom(view);
-            }
+            return dict;
         }
-        catch { }
-        return props;
+        finally { MsiCloseHandle(hView); }
     }
 
-    private static object RunSelect(object db, string sql)
+    /// <summary>Run a SELECT and return { query, columns, rowCount, truncated, rows }, or null on failure.</summary>
+    private static object? RunSelect(uint hDb, string sql)
     {
-        var view = Invoke(db, "OpenView", sql)
-            ?? throw new InvalidOperationException("OpenView returned null.");
+        if (MsiDatabaseOpenViewW(hDb, sql, out uint hView) != ERROR_SUCCESS) return null;
         try
         {
-            Invoke(view, "Execute", null!);
+            if (MsiViewExecute(hView, 0) != ERROR_SUCCESS) return null;
 
-            // Column names: OpenView -> ColumnInfo(0=Names, 1=Types)
-            object? colInfo = Invoke(view, "get_ColumnInfo", 0);
-            int colCount = 0;
             var columns = new List<string>();
-            if (colInfo is not null)
+            if (MsiViewGetColumnInfo(hView, MSICOLINFO_NAMES, out uint hCols) == ERROR_SUCCESS)
             {
                 try
                 {
-                    colCount = (int)(Invoke(colInfo, "get_FieldCount") ?? 0);
-                    for (int i = 1; i <= colCount; i++)
-                        columns.Add(Invoke(colInfo, "get_StringData", i)?.ToString() ?? "");
+                    uint cc = MsiRecordGetFieldCount(hCols);
+                    for (uint f = 1; f <= cc; f++) columns.Add(RecordString(hCols, f));
                 }
-                finally { ReleaseCom(colInfo); }
+                finally { MsiCloseHandle(hCols); }
             }
 
-            var rows = new List<Dictionary<string, string>>();
             const int RowCap = 5000;
-            while (rows.Count < RowCap)
+            var rows = new List<Dictionary<string, string>>();
+            while (rows.Count < RowCap && MsiViewFetch(hView, out uint hRec) == ERROR_SUCCESS)
             {
-                object? record = Invoke(view, "Fetch");
-                if (record is null) break;
                 try
                 {
-                    var row = new Dictionary<string, string>(columns.Count);
-                    for (int i = 1; i <= colCount; i++)
+                    uint fc = MsiRecordGetFieldCount(hRec);
+                    var row = new Dictionary<string, string>((int)fc);
+                    for (uint f = 1; f <= fc; f++)
                     {
-                        string val = Invoke(record, "get_StringData", i)?.ToString() ?? "";
-                        row[columns[i - 1]] = val;
+                        string col = f - 1 < columns.Count ? columns[(int)f - 1] : $"col{f}";
+                        row[col] = RecordString(hRec, f);
                     }
                     rows.Add(row);
                 }
-                finally { ReleaseCom(record); }
+                finally { MsiCloseHandle(hRec); }
             }
 
             return new
@@ -281,45 +223,19 @@ internal static class MsiQuery
                 rows,
             };
         }
-        finally
-        {
-            try { Invoke(view, "Close"); } catch { }
-            ReleaseCom(view);
-        }
+        finally { MsiCloseHandle(hView); }
     }
 
-    private static object? MakeRecord(int fields)
+    /// <summary>Read one string field of a record, sizing the buffer in two calls.</summary>
+    private static string RecordString(uint hRecord, uint field)
     {
-        var installerType = Type.GetTypeFromProgID("WindowsInstaller.Installer")!;
-        var installer = Activator.CreateInstance(installerType)!;
-        try
-        {
-            return Invoke(installer, "CreateRecord", fields);
-        }
-        finally
-        {
-            ReleaseCom(installer);
-        }
-    }
-
-    private static object? Invoke(object target, string member, params object?[] args)
-    {
-        var t = target.GetType();
-        // For property accessors via 'get_'/'set_', the COM dispatch will figure it out from
-        // method name in late-bound mode.
-        return t.InvokeMember(member,
-            BindingFlags.InvokeMethod | BindingFlags.GetProperty | BindingFlags.SetProperty,
-            null, target, args);
-    }
-
-    private static void ReleaseCom(object? obj)
-    {
-        if (obj is null) return;
-        try
-        {
-            if (System.Runtime.InteropServices.Marshal.IsComObject(obj))
-                System.Runtime.InteropServices.Marshal.ReleaseComObject(obj);
-        }
-        catch { }
+        uint cch = 0;
+        uint r = MsiRecordGetStringW(hRecord, field, new StringBuilder(), ref cch);
+        if (r != ERROR_SUCCESS && r != ERROR_MORE_DATA) return "";
+        if (cch == 0) return "";
+        cch++; // room for the null terminator
+        var sb = new StringBuilder((int)cch);
+        r = MsiRecordGetStringW(hRecord, field, sb, ref cch);
+        return r == ERROR_SUCCESS ? sb.ToString() : "";
     }
 }
