@@ -12,6 +12,10 @@ public sealed partial class SettingsPage : Page
     public SettingsPage()
     {
         InitializeComponent();
+
+        var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+        string version = v is null ? "1.0.0" : $"{v.Major}.{v.Minor}.{v.Build}";
+        AboutCreditText.Text = $"Made by Gus Catalano  ·  Version {version}";
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
