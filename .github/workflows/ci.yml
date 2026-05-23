@@ -33,3 +33,9 @@ jobs:
       # conflicts with Platform=ARM64 on an x64 runner. Passing -r overrides it.
       - name: Build
         run: dotnet build BinaryExplorer.csproj -c Release -p:Platform=${{ matrix.platform }} -r ${{ matrix.rid }}
+
+      # Run the test suite only on x64 — the ARM64 matrix entry is a cross-compile
+      # build check; running ARM64 tests would need an ARM64 runner.
+      - name: Test
+        if: matrix.platform == 'x64'
+        run: dotnet test tests/BinaryExplorer.Tests/BinaryExplorer.Tests.csproj -c Release -p:Platform=x64 --nologo

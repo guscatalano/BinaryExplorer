@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal MSI used by the BinaryExplorer.Tests project to exercise the MSI
+  reader. Build once with `wix build tests/fixtures/sample.wxs -arch x64 -o
+  tests/fixtures/sample.msi`; the resulting .msi is committed so the tests
+  don't need WiX at test time.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package
+    Name="BinaryExplorerTestFixture"
+    Manufacturer="BinaryExplorer Tests"
+    Version="1.0.0.0"
+    UpgradeCode="A1B2C3D4-1111-2222-3333-444444444444"
+    Scope="perMachine"
+    Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="Main" Title="Test" Level="1">
+      <ComponentRef Id="Marker" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="BinaryExplorerTestFixture" />
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="Marker" Directory="INSTALLFOLDER" Guid="*">
+      <RegistryValue Root="HKLM"
+                     Key="Software\BinaryExplorerTestFixture"
+                     Name="installed"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+</Wix>
