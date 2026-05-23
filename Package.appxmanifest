@@ -10,7 +10,7 @@
   <Identity
     Name="GusCatalano.BinaryExplorer"
     Publisher="CN=119E0257-3B74-437C-A728-AC7C50256853"
-    Version="1.0.1.0" />
+    Version="1.0.2.0" />
 
   <mp:PhoneIdentity PhoneProductId="0C97C973-F9F4-4728-A725-CA19FF45E236" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
