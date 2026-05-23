@@ -30,6 +30,7 @@ public static class BinaryLoader
     /// <summary>Inspectors that are happy to run against ANY file, not just PEs. PE-only inspectors are skipped when the file doesn't have an MZ header (e.g. an MSI/CFB) to avoid noisy 'invalid sections' errors.</summary>
     private static readonly HashSet<string> NonPeSafeInspectors = new(StringComparer.Ordinal)
     {
+        "Language",
         "Hashes",
         "MOTW",
         "Embedded",
@@ -45,11 +46,34 @@ public static class BinaryLoader
         AppState.Instance.Binary = context;
 
         bool isPe = context.Bytes.Length >= 2 && context.Bytes[0] == 0x4D && context.Bytes[1] == 0x5A;
-        var inspectorsToRun = isPe
-            ? DefaultInspectors
-            : DefaultInspectors.Where(i => NonPeSafeInspectors.Contains(i.Name)).ToArray();
 
-        var tasks = inspectorsToRun.Select(i => RunOne(i, context, ct)).ToArray();
+        var tasks = new List<Task>();
+        foreach (var inspector in DefaultInspectors)
+        {
+            if (isPe || NonPeSafeInspectors.Contains(inspector.Name))
+            {
+                tasks.Add(RunOne(inspector, context, ct));
+            }
+            else
+            {
+                // A PE-only inspector against a non-PE file (e.g. an MSI): publish a
+                // clean "not applicable" result up front so its page renders that
+                // instead of sitting forever on "Running...".
+                AppState.Instance.SetResult(new InspectionResult
+                {
+                    InspectorName = inspector.Name,
+                    Headline = "Not applicable — not a PE executable",
+                    Findings = new List<Finding>
+                    {
+                        new Finding(
+                            inspector.Name,
+                            $"The {inspector.Name} inspector only applies to PE binaries (.exe / .dll / .sys / .winmd).",
+                            "This file has no 'MZ' header. For an installer database see the MSI page; "
+                            + "Hashes, Strings, and Embedded Files work on any file type."),
+                    },
+                });
+            }
+        }
         await Task.WhenAll(tasks);
     }
 

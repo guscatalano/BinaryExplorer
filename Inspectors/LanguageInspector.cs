@@ -1,6 +1,7 @@
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using BinaryExplorer.Core;
+using BinaryExplorer.Services.Mcp;
 
 namespace BinaryExplorer.Inspectors;
 
@@ -15,6 +16,12 @@ public sealed class LanguageInspector : IBinaryInspector
             var findings = new List<Finding>();
             try
             {
+                // Non-PE files (no 'MZ' header) aren't executable code — describe what
+                // they are instead of failing in the PEReader constructor.
+                var raw = context.Bytes;
+                if (raw.Length < 2 || raw[0] != 0x4D || raw[1] != 0x5A)
+                    return DescribeNonPe(context);
+
                 using var stream = context.OpenStream();
                 using var pe = new PEReader(stream);
 
@@ -92,6 +99,51 @@ public sealed class LanguageInspector : IBinaryInspector
                 };
             }
         }, ct);
+    }
+
+    /// <summary>Describe a non-PE file — most importantly, flag MSI installer packages.</summary>
+    private InspectionResult DescribeNonPe(BinaryContext context)
+    {
+        var findings = new List<Finding>();
+        if (MsiQuery.IsCompoundFileBinary(context.Bytes))
+        {
+            string ext = System.IO.Path.GetExtension(context.Path).ToLowerInvariant();
+            bool isMsi = ext is ".msi" or ".msm" or ".msp";
+            findings.Add(new Finding("Format", "Compound File Binary (OLE structured storage)"));
+            findings.Add(new Finding("Runtime", "Not executable code"));
+            if (isMsi)
+            {
+                findings.Add(new Finding(
+                    "Windows Installer",
+                    "This is a Windows Installer database (.msi), not a PE executable — language / runtime detection does not apply.",
+                    "Open the MSI page for product info, files, registry changes, shortcuts, and custom actions."));
+                return new InspectionResult
+                {
+                    InspectorName = Name,
+                    Headline = "Windows Installer package (MSI) — not a PE executable",
+                    Findings = findings,
+                };
+            }
+            findings.Add(new Finding(
+                "Note",
+                "OLE compound document — the container format used by .msi installers, legacy Office documents, and .msg files."));
+            return new InspectionResult
+            {
+                InspectorName = Name,
+                Headline = "Compound File Binary (OLE) — not a PE executable",
+                Findings = findings,
+            };
+        }
+        findings.Add(new Finding(
+            "Format",
+            "Not a PE executable",
+            "The file has no 'MZ' header. Language / runtime detection only applies to Windows PE binaries (.exe / .dll / .sys / .winmd)."));
+        return new InspectionResult
+        {
+            InspectorName = Name,
+            Headline = "Not a PE executable",
+            Findings = findings,
+        };
     }
 
     private static string DetectClrFlavor(MetadataReader md)

@@ -24,6 +24,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
@@ -57,7 +58,14 @@
                      Severity="Error"
                      Title="Failed to open file" />
 
-            <Grid Grid.Row="3" ColumnSpacing="12" RowSpacing="12">
+            <InfoBar x:Name="MsiInfoBar" Grid.Row="3"
+                     IsOpen="False"
+                     IsClosable="False"
+                     Severity="Informational"
+                     Title="Windows Installer package"
+                     Message="This is an .msi installer database, not a PE executable — language, signature, ETW, and PE metadata don't apply. Open the MSI page for product info, files, registry changes, shortcuts, and custom actions." />
+
+            <Grid Grid.Row="4" ColumnSpacing="12" RowSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />

@@ -42,6 +42,10 @@ public sealed partial class OverviewPage : Page
         EtwHeadline.Text = AppState.Instance.GetResult("ETW")?.Headline ?? "—";
         PeHeadline.Text = AppState.Instance.GetResult("PE")?.Headline ?? "—";
         ExportButton.IsEnabled = AppState.Instance.IsLoaded;
+
+        var ctx = AppState.Instance.Binary;
+        MsiInfoBar.IsOpen = ctx is not null
+            && BinaryExplorer.Services.Mcp.MsiQuery.IsCompoundFileBinary(ctx.Bytes);
     }
 
     private void Page_DragOver(object sender, DragEventArgs e)
