@@ -501,6 +501,33 @@ internal static class McpTools
         },
         new
         {
+            name = "decompile_native_function",
+            description = "Produce a self-contained context bundle for ONE native function, designed for the calling LLM to translate into C-like pseudocode. Bundles: function metadata, the disassembly with IAT annotations, the unique imports the function calls, every string the function references (read directly from the data sections), and the callers that xref into it. Includes inline guidance — call this and then write pseudocode from the bundle. For managed (.NET) binaries, use the in-app Decompile page (ICSharpCode.Decompiler) instead — it produces real C#.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    path = new { type = "string" },
+                    address = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            va = new { type = "string" },
+                            rva = new { type = "string" },
+                            fileOffset = new { type = "string" },
+                        },
+                    },
+                    maxInstructions = new { type = "integer", description = "Cap on decoded instructions. Default 4000.", minimum = 1, maximum = 200000 },
+                    includeXrefs = new { type = "boolean", description = "Include callers (xrefs into this function). Default true." },
+                    includeStringRefs = new { type = "boolean", description = "Walk operands and surface strings the function references. Default true." },
+                },
+                required = Array.Empty<string>(),
+            },
+        },
+        new
+        {
             name = "find_xrefs_ex",
             description = "Cross-references with enclosing-function grouping and thunk resolution. references[].fromFunctionStartRva is the start RVA of the function that contains the reference; references[].resolvedFinalTarget is set when the call target is a thunk that resolves to an import. AddressRef precedence: va > rva > fileOffset (top-level 'target' still accepted for back-compat).",
             inputSchema = new
@@ -626,6 +653,7 @@ internal static class McpTools
             "disassemble_function"     => await Task.Run(() => DisassembleFunction(args)),
             "disassemble_nearest_function" => await Task.Run(() => DisassembleNearestFunction(args)),
             "find_xrefs_ex"            => await Task.Run(() => FindXrefsEx(args)),
+            "decompile_native_function" => await Task.Run(() => DecompileNativeFunction(args)),
             "find_string_refs_ex"      => await Task.Run(() => FindStringRefsEx(args)),
             "get_call_graph_ex"        => await Task.Run(() => GetCallGraphEx(args)),
             "summarize_import_usage"   => await Task.Run(() => SummarizeImportUsage(args)),
@@ -1902,6 +1930,265 @@ internal static class McpTools
             }
         }
         return (list, endRva);
+    }
+
+    // ===================== decompile_native_function =====================
+
+    /// <summary>
+    /// Build a self-contained context bundle for a single native function, designed
+    /// for the calling LLM to translate into C-like pseudocode. Bundles the
+    /// disassembly with IAT annotations, the unique imports the function calls, the
+    /// strings it references (read from the data sections), and the callers that
+    /// xref into it. Includes a short "what to do with this" prompt the LLM can use.
+    /// </summary>
+    private static object DecompileNativeFunction(JsonElement args)
+    {
+        string path = RequirePath(args);
+        int maxInstructions = args.TryGetProperty("maxInstructions", out var mie) && mie.TryGetInt32(out int mv)
+            ? Math.Clamp(mv, 1, 200000) : 4000;
+        bool includeXrefs = !args.TryGetProperty("includeXrefs", out var ixe) || ixe.ValueKind != JsonValueKind.False;
+        bool includeStringRefs = !args.TryGetProperty("includeStringRefs", out var ise) || ise.ValueKind != JsonValueKind.False;
+
+        var ctx = new BinaryContext(path);
+        using var ms = new MemoryStream(ctx.Bytes, writable: false);
+        using var pe = new PEReader(ms);
+        var opt = pe.PEHeaders.PEHeader;
+        if (opt is null) return new { error = "Not a PE file." };
+        var machine = pe.PEHeaders.CoffHeader.Machine;
+        if (machine != Machine.Amd64 && machine != Machine.I386)
+            return new { error = "x86/x64 only." };
+        int bitness = opt.Magic == PEMagic.PE32Plus ? 64 : 32;
+        bool pe32Plus = bitness == 64;
+        ulong imageBase = opt.ImageBase;
+
+        var a = TryResolveAddress(args, pe);
+        if (a is null) return new { error = "Provide an address (va/rva/fileOffset)." };
+
+        var idx = PeAnalysis.Analyze(ctx);
+        if (!idx.Supported) return new { error = "Whole-binary analysis isn't supported for this machine." };
+
+        var (fn, nextStart, _) = FindEnclosingFunction(idx, a.Rva);
+        if (fn is null) return new { error = $"No function found at or before RVA 0x{a.Rva:X}." };
+
+        if (!LanguageInspector.TryRvaToOffset(pe, (int)fn.Rva, out int fileOff))
+            return new { error = "Function start RVA doesn't map to a file offset." };
+
+        uint sectionEnd = uint.MaxValue;
+        foreach (var sec in pe.PEHeaders.SectionHeaders)
+            if (fn.Rva >= sec.VirtualAddress && fn.Rva < sec.VirtualAddress + (uint)sec.VirtualSize)
+            { sectionEnd = (uint)(sec.VirtualAddress + sec.VirtualSize); break; }
+        uint stopRva = Math.Min(nextStart, sectionEnd);
+
+        var iatMap = BuildIatMap(pe, ctx.Bytes, imageBase, pe32Plus);
+        var formatter = new MasmFormatter();
+        formatter.Options.DigitSeparator = "";
+
+        var instructionEntries = new List<object>();
+        var importsUsed = new HashSet<string>(StringComparer.Ordinal);
+        var stringRefs = new List<(string Va, string Value)>();
+        var stringRefAddrs = new HashSet<ulong>();
+        uint endRva = fn.Rva;
+
+        var reader = new ByteArrayCodeReader(ctx.Bytes, fileOff, ctx.Bytes.Length - fileOff);
+        var decoder = Iced.Intel.Decoder.Create(bitness, reader);
+        decoder.IP = imageBase + fn.Rva;
+        for (int j = 0; j < maxInstructions; j++)
+        {
+            ulong ip = decoder.IP;
+            uint rvaNow = (uint)(ip - imageBase);
+            if (rvaNow >= stopRva) break;
+            decoder.Decode(out var instr);
+            if (instr.IsInvalid) break;
+
+            var output = new StringOutput();
+            formatter.Format(instr, output);
+
+            string? importTarget = null;
+            string? stringRefValue = null;
+            for (int op = 0; op < instr.OpCount; op++)
+            {
+                var k = instr.GetOpKind(op);
+                ulong addr = 0;
+                if (k == OpKind.Memory)
+                {
+                    addr = instr.IsIPRelativeMemoryOperand
+                        ? instr.IPRelativeMemoryAddress
+                        : ((instr.MemoryBase == Register.None && instr.MemoryIndex == Register.None)
+                           ? (ulong)instr.MemoryDisplacement64 : 0UL);
+                }
+                else if (k is OpKind.Immediate32 or OpKind.Immediate32to64 or OpKind.Immediate64)
+                {
+                    addr = instr.GetImmediate(op);
+                }
+                if (addr == 0) continue;
+
+                if (importTarget is null && iatMap.TryGetValue(addr, out var imp))
+                {
+                    importTarget = imp;
+                    importsUsed.Add(imp);
+                }
+                if (includeStringRefs && stringRefValue is null && stringRefAddrs.Add(addr))
+                {
+                    string? sv = TryReadStringAtVa(ctx.Bytes, pe, imageBase, addr);
+                    if (sv is not null)
+                    {
+                        stringRefValue = sv;
+                        stringRefs.Add(("0x" + addr.ToString("X"), sv));
+                    }
+                }
+            }
+
+            instructionEntries.Add(new
+            {
+                rva = "0x" + rvaNow.ToString("X"),
+                text = output.ToString(),
+                importTarget,
+                stringRef = stringRefValue,
+            });
+            endRva = (uint)(decoder.IP - imageBase);
+            if (instr.FlowControl == FlowControl.Return) break;
+        }
+
+        // Callers (xrefs in).
+        object[] xrefsIn = Array.Empty<object>();
+        if (includeXrefs)
+        {
+            ulong fnVa = imageBase + fn.Rva;
+            if (idx.Xrefs.TryGetValue(fnVa, out var list))
+            {
+                xrefsIn = list.Take(20).Select(srcVa =>
+                {
+                    var (callerFn, _, _) = FindEnclosingFunction(idx, (uint)(srcVa - imageBase));
+                    return (object)new
+                    {
+                        fromVa = "0x" + srcVa.ToString("X"),
+                        fromRva = "0x" + (srcVa - imageBase).ToString("X"),
+                        fromFunctionRva = callerFn is null ? null : "0x" + callerFn.Rva.ToString("X"),
+                        fromFunctionName = callerFn?.Name,
+                    };
+                }).ToArray();
+            }
+        }
+
+        // Markdown bundle — single block the LLM can read and reason over.
+        var sb = new StringBuilder();
+        sb.AppendLine($"# Decompilation bundle: {fn.Name}  (RVA 0x{fn.Rva:X})");
+        sb.AppendLine();
+        sb.AppendLine("## Metadata");
+        sb.AppendLine($"- File: {System.IO.Path.GetFileName(path)}");
+        sb.AppendLine($"- Architecture: {(bitness == 64 ? "x64" : "x86")}");
+        sb.AppendLine($"- Function RVA: 0x{fn.Rva:X}  (VA 0x{imageBase + fn.Rva:X})");
+        sb.AppendLine($"- End RVA: 0x{endRva:X}  ({endRva - fn.Rva} bytes, {instructionEntries.Count} instructions decoded)");
+        sb.AppendLine($"- Section: {fn.Section ?? "?"}");
+        sb.AppendLine($"- Discovery: {(fn.Confirmed ? "confirmed (entry / export / TLS)" : "discovered via call target")}");
+        sb.AppendLine();
+
+        sb.AppendLine($"## Imports called ({importsUsed.Count} unique)");
+        if (importsUsed.Count == 0) sb.AppendLine("- (none)");
+        else foreach (var imp in importsUsed.OrderBy(s => s, StringComparer.Ordinal)) sb.AppendLine($"- `{imp}`");
+        sb.AppendLine();
+
+        if (includeStringRefs)
+        {
+            sb.AppendLine($"## String references ({stringRefs.Count})");
+            if (stringRefs.Count == 0) sb.AppendLine("- (none)");
+            else foreach (var (va, val) in stringRefs)
+                sb.AppendLine($"- {va}: `{val.Replace("`", "\\`")}`");
+            sb.AppendLine();
+        }
+
+        if (includeXrefs)
+        {
+            sb.AppendLine($"## Callers — xrefs into this function ({xrefsIn.Length} shown)");
+            if (xrefsIn.Length == 0) sb.AppendLine("- (none recorded — could be an unreachable / indirect-only target)");
+            else foreach (dynamic x in xrefsIn)
+                sb.AppendLine($"- {x.fromVa}  in function {x.fromFunctionRva ?? "?"}  ({x.fromFunctionName ?? "?"})");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("## Disassembly");
+        sb.AppendLine("```");
+        foreach (dynamic ins in instructionEntries)
+        {
+            string text = ins.text;
+            string annot = "";
+            if (ins.importTarget is not null) annot += $"  ; -> {ins.importTarget}";
+            if (ins.stringRef is not null) annot += $"  ; \"{((string)ins.stringRef).Replace("\"", "\\\"")}\"";
+            sb.AppendLine($"{ins.rva}: {text}{annot}");
+        }
+        sb.AppendLine("```");
+        sb.AppendLine();
+
+        sb.AppendLine("## What to do with this");
+        sb.AppendLine();
+        sb.AppendLine("Translate the disassembly above into C-like pseudocode for ONE function.");
+        sb.AppendLine();
+        sb.AppendLine("- Replace `call qword ptr [imp_X]` style with the resolved import name (see 'Imports called').");
+        sb.AppendLine("- Use the string references to name local variables and infer what the function operates on.");
+        sb.AppendLine("- Use the callers list to infer the function's role.");
+        sb.AppendLine("- Mark uncertain reconstructions with `/* TODO: ... */`.");
+        sb.AppendLine("- Output only the function body in C syntax — do not invent surrounding code.");
+
+        return new
+        {
+            path,
+            function = new
+            {
+                name = fn.Name,
+                rva = "0x" + fn.Rva.ToString("X"),
+                va = "0x" + (imageBase + fn.Rva).ToString("X"),
+                endRva = "0x" + endRva.ToString("X"),
+                sizeBytes = endRva - fn.Rva,
+                section = fn.Section,
+                confirmed = fn.Confirmed,
+            },
+            bitness,
+            instructionCount = instructionEntries.Count,
+            importsUsed = importsUsed.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
+            stringRefs = stringRefs.Select(s => new { va = s.Va, value = s.Value }).ToArray(),
+            xrefsIn,
+            instructions = instructionEntries,
+            bundle = sb.ToString(),
+        };
+    }
+
+    /// <summary>
+    /// Try to read a printable null-terminated string (ASCII or UTF-16LE) at the given VA.
+    /// Returns null if the VA isn't in a non-executable data section, or no plausible string is there.
+    /// </summary>
+    private static string? TryReadStringAtVa(byte[] bytes, PEReader pe, ulong imageBase, ulong va)
+    {
+        if (va < imageBase) return null;
+        uint rva = (uint)(va - imageBase);
+        int fileOff = -1;
+        foreach (var sec in pe.PEHeaders.SectionHeaders)
+        {
+            if (rva < sec.VirtualAddress || rva >= sec.VirtualAddress + (uint)sec.VirtualSize) continue;
+            if ((sec.SectionCharacteristics & SectionCharacteristics.MemExecute) != 0) return null;
+            fileOff = sec.PointerToRawData + (int)(rva - sec.VirtualAddress);
+            break;
+        }
+        if (fileOff < 0 || fileOff >= bytes.Length) return null;
+
+        int max = Math.Min(bytes.Length - fileOff, 512);
+
+        // ASCII probe.
+        int end = fileOff;
+        while (end < fileOff + max && bytes[end] >= 0x20 && bytes[end] < 0x7F) end++;
+        if (end - fileOff >= 4 && end < bytes.Length && bytes[end] == 0)
+            return Encoding.ASCII.GetString(bytes, fileOff, end - fileOff);
+
+        // UTF-16LE probe.
+        if (fileOff + 1 < bytes.Length && bytes[fileOff] >= 0x20 && bytes[fileOff] < 0x7F && bytes[fileOff + 1] == 0)
+        {
+            end = fileOff;
+            while (end + 1 < fileOff + max
+                && bytes[end] >= 0x20 && bytes[end] < 0x7F && bytes[end + 1] == 0) end += 2;
+            int len = end - fileOff;
+            if (len >= 8 && end + 1 < bytes.Length && bytes[end] == 0 && bytes[end + 1] == 0)
+                return Encoding.Unicode.GetString(bytes, fileOff, len);
+        }
+        return null;
     }
 
     // ===================== find_xrefs_ex =====================
