@@ -103,6 +103,26 @@ installer/            — WiX v5 source for the MSI
 .github/workflows/    — CI (build) and Release (MSIX + MSI) pipelines
 ```
 
+## Security notes
+
+BinaryExplorer runs locally and has no telemetry. A few things worth knowing:
+
+- **Network features are opt-in.** By default nothing leaves your machine. If you
+  set a VirusTotal API key, the app sends the **SHA-256 hash** of the file you're
+  inspecting to VirusTotal (the hash only — the file itself is never uploaded).
+  Installing YARA from within the app downloads it from GitHub. Both are
+  user-initiated.
+- **The VirusTotal API key is stored unencrypted** in the app's local settings
+  (`ApplicationData.LocalSettings`). If that's a concern, don't configure a key —
+  everything else works offline.
+- **The MCP server has no authentication** and sets a permissive CORS header
+  (`Access-Control-Allow-Origin: *`) while running, so any local process — or a
+  web page open in your browser — could reach it. It stays off until you start it
+  from `Settings → MCP server`; start it only when you need it and stop it when
+  you're done.
+- A local startup/crash log is written to `%USERPROFILE%\.binexp-startup.log`; it
+  contains version/OS info and error stack traces, and never leaves your machine.
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
