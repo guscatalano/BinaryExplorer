@@ -1,0 +1,79 @@
+name: Store publish
+
+# Publishes the app + store/listing.*.json to the Microsoft Store on every v* tag
+# (or manually via Run workflow). Uses the shared pipeline in guscatalano/store-publish.
+# The package is UNSIGNED — the Store signs on ingestion.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $v = '${{ github.ref_name }}'.TrimStart('v')
+            if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Tag must be vX.Y.Z, got '${{ github.ref_name }}'" }
+            $v = "$v.0"
+          } else {
+            # Manual run: newest v-tag + run number as the 4th segment keeps the
+            # version unique and increasing (the Store rejects reused versions).
+            $base = git tag --list 'v*' | ForEach-Object { $_.TrimStart('v') } |
+              Where-Object { $_ -match '^\d+\.\d+\.\d+$' } |
+              Sort-Object { [version]$_ } | Select-Object -Last 1
+            if (-not $base) { $base = '1.0.0' }
+            $v = "$base.${{ github.run_number }}"
+          }
+          "version=$v" | Out-File $env:GITHUB_OUTPUT -Append
+          Write-Host "Store package version: $v"
+
+      - name: Stamp manifest version
+        shell: pwsh
+        run: |
+          $manifest = 'Package.appxmanifest'
+          [xml]$m = Get-Content $manifest
+          $m.Package.Identity.Version = '${{ steps.ver.outputs.version }}'
+          $m.Save((Resolve-Path $manifest))
+
+      - name: Build Store package (unsigned, x64)
+        run: >
+          dotnet build BinaryExplorer.csproj -c Release
+          -p:Platform=x64
+          -r win-x64
+          -p:GenerateAppxPackageOnBuild=true
+          -p:AppxPackageDir=${{ github.workspace }}\artifacts\msix\
+          -p:UapAppxPackageBuildMode=StoreUpload
+          -p:AppxBundle=Never
+          -p:AppxPackageSigningEnabled=false
+          -p:AppxSymbolPackageEnabled=false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: store-package
+          path: artifacts/msix/**/*.msix*
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    uses: guscatalano/store-publish/.github/workflows/publish.yml@main
+    with:
+      product-id: 9N4HTNCSTVMR
+      package-artifact: store-package
+    secrets: inherit
